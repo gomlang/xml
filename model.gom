@@ -1,0 +1,105 @@
+package xml;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ErrorKind {
+    Syntax,
+    Utf8,
+    Namespace,
+    Entity,
+    Limit,
+    State,
+    Serde,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Error {
+    pub kind: ErrorKind,
+    pub offset: isize,
+    pub message: string,
+}
+
+impl ToString for Error {
+    fn to_string(self: Error) -> string {
+        f"XML byte {self.offset}: {self.message}"
+    }
+}
+
+fn error(kind: ErrorKind, offset: isize, message: string) -> Error {
+    Error { kind, offset, message }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Limits {
+    pub max_input_bytes: isize,
+    pub max_pending_bytes: isize,
+    pub max_token_bytes: isize,
+    pub max_decoded_bytes: isize,
+    pub max_output_bytes: isize,
+    pub max_depth: isize,
+    pub max_attributes: isize,
+    pub max_tokens: isize,
+}
+
+impl Limits {
+    pub fn standard() -> Limits {
+        Limits {
+            max_input_bytes: 16777216,
+            max_pending_bytes: 1048576,
+            max_token_bytes: 1048576,
+            max_decoded_bytes: 16777216,
+            max_output_bytes: 16777216,
+            max_depth: 128,
+            max_attributes: 1024,
+            max_tokens: 1000000,
+        }
+    }
+
+    fn validate(self: Limits) -> Result[(), Error] {
+        if self.max_input_bytes < 0 || self.max_pending_bytes < 1 || self.max_token_bytes < 1
+            || self.max_decoded_bytes < 0
+            || self.max_output_bytes < 0
+            || self.max_depth < 0
+            || self.max_attributes < 0
+            || self.max_tokens < 0 {
+            Result::Err(error(ErrorKind::Limit, 0, "invalid XML limits"))
+        } else {
+            Result::Ok(())
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct QName {
+    pub prefix: string,
+    pub local: string,
+    pub uri: string,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Attribute {
+    pub name: QName,
+    pub value: string,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Namespace {
+    pub prefix: string,
+    pub uri: string,
+}
+
+#[derive(PartialEq, Eq)]
+pub struct Element {
+    pub name: QName,
+    pub attributes: Vec[Attribute],
+    pub namespaces: Vec[Namespace],
+}
+
+#[derive(PartialEq, Eq)]
+pub enum Token {
+    Start(Element),
+    End(QName),
+    Text(string),
+    Comment(string),
+    CData(string),
+    Instruction(string, string),
+}

@@ -1,0 +1,208 @@
+package xml;
+
+struct WriterState {
+    output: isize,
+    tokens: isize,
+    open: Vec[QName],
+    scopes: Vec[Vec[Namespace]],
+    root_seen: bool,
+    root_done: bool,
+    ended: bool,
+    failed: bool,
+}
+
+pub struct Writer {
+    limits: Limits,
+    state: Ref[WriterState],
+}
+
+fn initial_writer_state() -> WriterState {
+    WriterState {
+        output: 0,
+        tokens: 0,
+        open: Vec::new(),
+        scopes: Vec::new(),
+        root_seen: false,
+        root_done: false,
+        ended: false,
+        failed: false,
+    }
+}
+
+fn write_token(token: Token, state: WriterState, limits: Limits) -> Result[
+    (string, WriterState),
+    Error,
+] {
+    if state.tokens >= limits.max_tokens {
+        return Result::Err(error(ErrorKind::Limit, state.output, "XML token count exceeds limit"))
+    }
+    let result = match token {
+        Token::Start(element) => {
+            if state.root_done || state.open.len() >= limits.max_depth {
+                return Result::Err(
+                    error(ErrorKind::State, state.output, "invalid XML element depth"),
+                )
+            }
+            if element.attributes.len() > limits.max_attributes {
+                return Result::Err(
+                    error(ErrorKind::Limit, state.output, "XML attribute count exceeds limit"),
+                )
+            }
+            for index in 0..element.namespaces.len() {
+                check_namespace(element.namespaces[index], state.output)?;
+                for prior in 0..index {
+                    if element.namespaces[prior].prefix == element.namespaces[index].prefix {
+                        return Result::Err(
+                            error(
+                                ErrorKind::Namespace,
+                                state.output,
+                                "duplicate namespace declaration",
+                            ),
+                        )
+                    }
+                }
+            }
+            check_qname(element.name, false, element.namespaces, state.scopes, state.output)?;
+            let mut output = "<" + rendered_name(element.name);
+            for declaration in element.namespaces {
+                let key = if declaration.prefix == "" {
+                    "xmlns"
+                } else {
+                    "xmlns:" + declaration.prefix
+                };
+                output += " " + key + "=\""
+                    + escape_attribute(declaration.uri, limits.max_token_bytes)?
+                    + "\"";
+            }
+            for index in 0..element.attributes.len() {
+                let attribute = element.attributes[index];
+                check_qname(attribute.name, true, element.namespaces, state.scopes, state.output)?;
+                for prior in 0..index {
+                    let previous = element.attributes[prior].name;
+                    if previous.uri == attribute.name.uri && previous.local == attribute.name.local {
+                        return Result::Err(
+                            error(
+                                ErrorKind::Namespace,
+                                state.output,
+                                "duplicate expanded attribute",
+                            ),
+                        )
+                    }
+                }
+                output += " " + rendered_name(attribute.name) + "=\""
+                    + escape_attribute(attribute.value, limits.max_token_bytes)?
+                    + "\"";
+            }
+            output += ">";
+            state.open.push(element.name);
+            state.scopes.push(element.namespaces);
+            state.root_seen = true;
+            output
+        },
+        Token::End(name) => {
+            if state.open.len() == 0 || state.open[state.open.len() - 1] != name {
+                return Result::Err(
+                    error(ErrorKind::State, state.output, "mismatched XML end token"),
+                )
+            }
+            let _ = state.open.pop();
+            let _ = state.scopes.pop();
+            if state.open.len() == 0 {
+                state.root_done = true;
+            }
+            "</" + rendered_name(name) + ">"
+        },
+        Token::Text(value) => {
+            if state.open.len() == 0 {
+                return Result::Err(error(ErrorKind::State, state.output, "text outside XML root"))
+            }
+            escape_text(value, limits.max_token_bytes)?
+        },
+        Token::Comment(value) => {
+            if value.find("--").is_some() || value.ends_with("-") {
+                return Result::Err(error(ErrorKind::Syntax, state.output, "invalid XML comment"))
+            }
+            "<!--" + plain(value, state.output, limits.max_token_bytes)? + "-->"
+        },
+        Token::CData(value) => {
+            if state.open.len() == 0 || value.find("]]>").is_some() {
+                return Result::Err(error(ErrorKind::Syntax, state.output, "invalid XML CDATA"))
+            }
+            "<![CDATA[" + plain(value, state.output, limits.max_token_bytes)? + "]" + "]>"
+        },
+        Token::Instruction(target, value) => {
+            let _ = split_name(target, state.output)?;
+            if target.to_ascii_lowercase() == "xml"
+                && (target != "xml" || state.root_seen || state.tokens != 0) {
+                return Result::Err(
+                    error(ErrorKind::Syntax, state.output, "XML declaration is misplaced"),
+                )
+            }
+            if value.find("?>").is_some() {
+                return Result::Err(
+                    error(ErrorKind::Syntax, state.output, "invalid XML instruction"),
+                )
+            }
+            "<?" + target
+                + if value == "" {
+                    ""
+                } else {
+                    " " + plain(value, state.output, limits.max_token_bytes)?
+                }
+                + "?>"
+        },
+    };
+    if result.byte_len() > limits.max_token_bytes
+        || result.byte_len() > limits.max_output_bytes - state.output {
+        return Result::Err(error(ErrorKind::Limit, state.output, "XML output exceeds limit"))
+    }
+    state.output += result.byte_len();
+    state.tokens += 1;
+    Result::Ok((result, state))
+}
+
+impl Writer {
+    pub fn new(limits: Limits) -> Result[Writer, Error] {
+        limits.validate()?;
+        Result::Ok(Writer { limits, state: Ref::new(initial_writer_state()) })
+    }
+
+    pub fn write(self: Writer, token: Token) -> Result[string, Error] {
+        let state = self.state.get();
+        if state.ended || state.failed {
+            return Result::Err(error(ErrorKind::State, state.output, "XML writer is closed"))
+        }
+        match write_token(token, state, self.limits) {
+            Result::Ok((output, updated)) => {
+                self.state.set(updated);
+                Result::Ok(output)
+            },
+            Result::Err(problem) => {
+                state.failed = true;
+                self.state.set(state);
+                Result::Err(problem)
+            },
+        }
+    }
+
+    pub fn finish(self: Writer) -> Result[(), Error] {
+        let state = self.state.get();
+        if state.ended || state.failed || !state.root_seen || !state.root_done
+            || state.open.len() != 0 {
+            return Result::Err(error(ErrorKind::State, state.output, "incomplete XML output"))
+        }
+        state.ended = true;
+        self.state.set(state);
+        Result::Ok(())
+    }
+}
+
+pub fn write_all(tokens: Vec[Token], limits: Limits) -> Result[string, Error] {
+    let writer = Writer::new(limits)?;
+    let output: Vec[u8] = Vec::new();
+    for token in tokens {
+        output.extend(writer.write(token)?.to_bytes());
+    }
+    writer.finish()?;
+    Result::Ok(string_from_utf8(output).1)
+}

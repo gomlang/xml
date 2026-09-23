@@ -1,0 +1,144 @@
+package xml;
+
+pub const XML_URI: string = "http://www.w3.org/XML/1998/namespace";
+
+pub const XMLNS_URI: string = "http://www.w3.org/2000/xmlns/";
+
+fn name_start(value: u32) -> bool {
+    (value >= 65 && value <= 90) || value == 95 || (value >= 97 && value <= 122)
+        || (value >= 192 && value <= 214)
+        || (value >= 216 && value <= 246)
+        || (value >= 248 && value <= 767)
+        || (value >= 880 && value <= 893)
+        || (value >= 895 && value <= 8191)
+        || (value >= 8204 && value <= 8205)
+        || (value >= 8304 && value <= 8591)
+        || (value >= 11264 && value <= 12271)
+        || (value >= 12289 && value <= 55295)
+        || (value >= 63744 && value <= 64975)
+        || (value >= 65008 && value <= 65533)
+        || (value >= 65536 && value <= 983039)
+}
+
+fn name_char(value: u32) -> bool {
+    name_start(value) || value == 45 || value == 46 || (value >= 48 && value <= 57) || value == 183
+        || (value >= 768 && value <= 879)
+        || (value >= 8255 && value <= 8256)
+}
+
+fn ncname(value: string) -> bool {
+    let mut first = true;
+    for character in value.chars() {
+        let scalar = character.to_u32();
+        if first {
+            if !name_start(scalar) {
+                return false
+            }
+            first = false;
+        } else if !name_char(scalar) {
+            return false
+        }
+    }
+    !first
+}
+
+fn split_name(value: string, offset: isize) -> Result[(string, string), Error] {
+    if let Some((prefix, local)) = value.split_once(":") {
+        if !ncname(prefix) || !ncname(local) {
+            return Result::Err(error(ErrorKind::Syntax, offset, "invalid qualified XML name"))
+        }
+        Result::Ok((prefix, local))
+    } else if ncname(value) {
+        Result::Ok(("", value))
+    } else {
+        Result::Err(error(ErrorKind::Syntax, offset, "invalid XML name"))
+    }
+}
+
+fn rendered_name(name: QName) -> string {
+    if name.prefix == "" {
+        name.local
+    } else {
+        name.prefix + ":" + name.local
+    }
+}
+
+fn check_namespace(value: Namespace, offset: isize) -> Result[(), Error] {
+    if value.prefix != "" && !ncname(value.prefix) {
+        return Result::Err(error(ErrorKind::Namespace, offset, "invalid namespace prefix"))
+    }
+    if value.prefix == "xmlns" || value.uri == XMLNS_URI
+        || (value.prefix == "xml" && value.uri != XML_URI)
+        || (value.prefix != "xml" && value.uri == XML_URI)
+        || (value.prefix != "" && value.uri == "") {
+        return Result::Err(
+            error(ErrorKind::Namespace, offset, "reserved or empty namespace binding"),
+        )
+    }
+    Result::Ok(())
+}
+
+fn resolve(
+    prefix: string,
+    attribute: bool,
+    current: Vec[Namespace],
+    scopes: Vec[Vec[Namespace]],
+    offset: isize,
+) -> Result[string, Error] {
+    if prefix == "xmlns" {
+        return Result::Err(
+            error(ErrorKind::Namespace, offset, "xmlns cannot name an element or attribute"),
+        )
+    }
+    if prefix == "xml" {
+        return Result::Ok(XML_URI)
+    }
+    if prefix == "" && attribute {
+        return Result::Ok("")
+    }
+    for declaration in current {
+        if declaration.prefix == prefix {
+            return Result::Ok(declaration.uri)
+        }
+    }
+    for index in 0..scopes.len() {
+        for declaration in scopes[scopes.len() - index - 1] {
+            if declaration.prefix == prefix {
+                return Result::Ok(declaration.uri)
+            }
+        }
+    }
+    if prefix == "" {
+        Result::Ok("")
+    } else {
+        Result::Err(error(ErrorKind::Namespace, offset, "undeclared namespace prefix"))
+    }
+}
+
+fn qualified(
+    raw: string,
+    attribute: bool,
+    current: Vec[Namespace],
+    scopes: Vec[Vec[Namespace]],
+    offset: isize,
+) -> Result[QName, Error] {
+    let (prefix, local) = split_name(raw, offset)?;
+    Result::Ok(QName { prefix, local, uri: resolve(prefix, attribute, current, scopes, offset)? })
+}
+
+fn check_qname(
+    value: QName,
+    attribute: bool,
+    current: Vec[Namespace],
+    scopes: Vec[Vec[Namespace]],
+    offset: isize,
+) -> Result[(), Error] {
+    let parsed = qualified(rendered_name(value), attribute, current, scopes, offset)?;
+    if parsed.uri != value.uri {
+        Result::Err(
+            error(ErrorKind::Namespace, offset, "qualified name URI disagrees with binding"),
+        )
+    } else {
+        Result::Ok(())
+    }
+}

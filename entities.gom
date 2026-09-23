@@ -1,0 +1,173 @@
+package xml;
+
+use std::utf8;
+
+fn xml_character(value: char) -> bool {
+    let scalar = value.to_u32();
+    scalar == 9 || scalar == 10 || scalar == 13 || (scalar >= 32 && scalar <= 55295)
+        || (scalar >= 57344 && scalar <= 65533)
+        || (scalar >= 65536 && scalar <= 1114111)
+}
+
+fn append_text(output: Vec[u8], value: string, limit: isize, offset: isize) -> Result[(), Error] {
+    if value.byte_len() > limit - output.len() {
+        return Result::Err(error(ErrorKind::Limit, offset, "XML decoded text exceeds limit"))
+    }
+    output.extend(value.to_bytes());
+    Result::Ok(())
+}
+
+fn digit(value: u8, hex: bool) -> Option[u32] {
+    if value >= 48 && value <= 57 {
+        Option::Some((value - 48).to_u32())
+    } else if hex && value >= 65 && value <= 70 {
+        Option::Some((value - 55).to_u32())
+    } else if hex && value >= 97 && value <= 102 {
+        Option::Some((value - 87).to_u32())
+    } else {
+        Option::None
+    }
+}
+
+fn reference(body: string, offset: isize) -> Result[string, Error] {
+    match body {
+        "amp" => return Result::Ok("&"),
+        "lt" => return Result::Ok("<"),
+        "gt" => return Result::Ok(">"),
+        "quot" => return Result::Ok("\""),
+        "apos" => return Result::Ok("'"),
+        _ => (),
+    }
+    if !body.starts_with("#") {
+        return Result::Err(error(ErrorKind::Entity, offset, "unknown XML entity"))
+    }
+    let hexadecimal = body.starts_with("#x") || body.starts_with("#X");
+    let start = if hexadecimal {
+        2
+    } else {
+        1
+    };
+    if body.byte_len() == start {
+        return Result::Err(error(ErrorKind::Entity, offset, "empty character reference"))
+    }
+    let base: u32 = if hexadecimal {
+        16
+    } else {
+        10
+    };
+    let mut scalar: u32 = 0;
+    for index in start..body.byte_len() {
+        let part = digit(body.byte_get(index), hexadecimal).ok_or(
+            error(ErrorKind::Entity, offset, "invalid character reference digit"),
+        )?;
+        if scalar > (1114111 - part) / base {
+            return Result::Err(error(ErrorKind::Entity, offset, "character reference overflows"))
+        }
+        scalar = scalar * base + part;
+    }
+    let value = char_from_u32(scalar).ok_or(
+        error(ErrorKind::Entity, offset, "invalid Unicode character reference"),
+    )?;
+    if !xml_character(value) {
+        return Result::Err(error(ErrorKind::Entity, offset, "forbidden XML character reference"))
+    }
+    Result::Ok(value.to_string())
+}
+
+fn decode_entities(value: string, attribute: bool, offset: isize, limit: isize) -> Result[
+    string,
+    Error,
+] {
+    let input = value.to_bytes();
+    let output: Vec[u8] = Vec::new();
+    let mut cursor = 0;
+    while cursor < input.len() {
+        if input[cursor] == 38 {
+            let start = cursor;
+            cursor += 1;
+            while cursor < input.len() && input[cursor] != 59 {
+                cursor += 1;
+            }
+            if cursor == input.len() {
+                return Result::Err(
+                    error(ErrorKind::Entity, offset + start, "unterminated XML entity"),
+                )
+            }
+            let body = value.byte_slice(start + 1, cursor);
+            append_text(output, reference(body, offset + start)?, limit, offset + start)?;
+            cursor += 1;
+            continue
+        }
+        let (character, width) = utf8::decode_first(input.as_slice().sub(cursor, input.len())).map_err(
+            |_| error(ErrorKind::Utf8, offset + cursor, "invalid UTF-8"),
+        )?;
+        if !xml_character(character) || (attribute && character == '<') {
+            return Result::Err(error(ErrorKind::Syntax, offset + cursor, "forbidden XML character"))
+        }
+        if character == '\r' {
+            if cursor + width < input.len() && input[cursor + width] == 10 {
+                cursor += 1;
+            }
+            append_text(
+                output,
+                if attribute {
+                    " "
+                } else {
+                    "\n"
+                },
+                limit,
+                offset + cursor,
+            )?;
+        } else if attribute && (character == '\n' || character == '\t') {
+            append_text(output, " ", limit, offset + cursor)?;
+        } else {
+            append_text(output, character.to_string(), limit, offset + cursor)?;
+        }
+        cursor += width;
+    }
+    Result::Ok(string_from_utf8(output).1)
+}
+
+fn escape_value(value: string, attribute: bool, max_bytes: isize) -> Result[string, Error] {
+    if max_bytes < 0 {
+        return Result::Err(error(ErrorKind::Limit, 0, "invalid XML output limit"))
+    }
+    let output: Vec[u8] = Vec::new();
+    for character in value.chars() {
+        if !xml_character(character) {
+            return Result::Err(error(ErrorKind::Syntax, 0, "forbidden XML character"))
+        }
+        let replacement = match character {
+            '&' => "&amp;",
+            '<' => "&lt;",
+            '>' => "&gt;",
+            '"' => if attribute {
+                "&quot;"
+            } else {
+                "\""
+            },
+            '\t' => if attribute {
+                "&#x9;"
+            } else {
+                "\t"
+            },
+            '\n' => if attribute {
+                "&#xA;"
+            } else {
+                "\n"
+            },
+            '\r' => "&#xD;",
+            _ => character.to_string(),
+        };
+        append_text(output, replacement, max_bytes, 0)?;
+    }
+    Result::Ok(string_from_utf8(output).1)
+}
+
+pub fn escape_text(value: string, max_bytes: isize) -> Result[string, Error] {
+    escape_value(value, false, max_bytes)
+}
+
+pub fn escape_attribute(value: string, max_bytes: isize) -> Result[string, Error] {
+    escape_value(value, true, max_bytes)
+}

@@ -1,0 +1,287 @@
+package xml;
+
+use std::num;
+use std::serde;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ScalarKind {
+    Text,
+    Bool,
+    Signed,
+    Unsigned,
+}
+
+#[derive(PartialEq, Eq)]
+pub enum FieldSource {
+    Attribute(QName),
+    Child(QName),
+}
+
+pub struct Field {
+    pub field: string,
+    pub source: FieldSource,
+    pub kind: ScalarKind,
+}
+
+pub struct Schema {
+    root: QName,
+    namespaces: Vec[Namespace],
+    fields: Vec[Field],
+}
+
+fn same_name(left: QName, right: QName) -> bool {
+    left.uri == right.uri && left.local == right.local
+}
+
+fn same_source(left: FieldSource, right: FieldSource) -> bool {
+    match (left, right) {
+        (FieldSource::Attribute(a), FieldSource::Attribute(b)) | (
+            FieldSource::Child(a),
+            FieldSource::Child(b),
+        ) => same_name(a, b),
+        _ => false,
+    }
+}
+
+fn scalar_value(value: string, kind: ScalarKind) -> Result[serde::Value, Error] {
+    match kind {
+        ScalarKind::Text => Result::Ok(serde::Value::String(value)),
+        ScalarKind::Bool => match value {
+            "true" | "1" => Result::Ok(serde::Value::Bool(true)),
+            "false" | "0" => Result::Ok(serde::Value::Bool(false)),
+            _ => Result::Err(error(ErrorKind::Serde, 0, "invalid XML boolean")),
+        },
+        ScalarKind::Signed => {
+            let _ = num::parse_int_structured(value).map_err(
+                |_| error(ErrorKind::Serde, 0, "invalid signed XML integer"),
+            )?;
+            Result::Ok(serde::Value::Number(value))
+        },
+        ScalarKind::Unsigned => {
+            let _ = num::parse_uint_structured(value).map_err(
+                |_| error(ErrorKind::Serde, 0, "invalid unsigned XML integer"),
+            )?;
+            Result::Ok(serde::Value::Number(value))
+        },
+    }
+}
+
+fn numeric_text(value: serde::Value) -> Option[string] {
+    match value {
+        serde::Value::Number(value) => Option::Some(value),
+        serde::Value::Int(value) => Option::Some(value.to_string()),
+        serde::Value::Int8(value) => Option::Some(value.to_string()),
+        serde::Value::Int16(value) => Option::Some(value.to_string()),
+        serde::Value::Int32(value) => Option::Some(value.to_string()),
+        serde::Value::Int64(value) => Option::Some(value.to_string()),
+        serde::Value::Uint(value) => Option::Some(value.to_string()),
+        serde::Value::Uint8(value) => Option::Some(value.to_string()),
+        serde::Value::Uint16(value) => Option::Some(value.to_string()),
+        serde::Value::Uint32(value) => Option::Some(value.to_string()),
+        serde::Value::Uint64(value) => Option::Some(value.to_string()),
+        _ => Option::None,
+    }
+}
+
+fn scalar_text(value: serde::Value, kind: ScalarKind) -> Result[string, Error] {
+    match kind {
+        ScalarKind::Text => match value {
+            serde::Value::String(value) => Result::Ok(value),
+            serde::Value::Char(value) => Result::Ok(value.to_string()),
+            _ => Result::Err(error(ErrorKind::Serde, 0, "expected text field")),
+        },
+        ScalarKind::Bool => match value {
+            serde::Value::Bool(true) => Result::Ok("true"),
+            serde::Value::Bool(false) => Result::Ok("false"),
+            _ => Result::Err(error(ErrorKind::Serde, 0, "expected boolean field")),
+        },
+        ScalarKind::Signed | ScalarKind::Unsigned => {
+            let text = numeric_text(value).ok_or(
+                error(ErrorKind::Serde, 0, "expected integer field"),
+            )?;
+            let _ = scalar_value(text, kind)?;
+            Result::Ok(text)
+        },
+    }
+}
+
+impl Schema {
+    pub fn new(root: QName, namespaces: Vec[Namespace], fields: Vec[Field]) -> Result[Schema, Error] {
+        for index in 0..namespaces.len() {
+            check_namespace(namespaces[index], 0)?;
+            for prior in 0..index {
+                if namespaces[prior].prefix == namespaces[index].prefix {
+                    return Result::Err(
+                        error(ErrorKind::Namespace, 0, "duplicate namespace declaration"),
+                    )
+                }
+            }
+        }
+        check_qname(root, false, namespaces, Vec::new(), 0)?;
+        for index in 0..fields.len() {
+            if fields[index].field == "" {
+                return Result::Err(error(ErrorKind::Serde, 0, "empty struct field name"))
+            }
+            let (name, attribute) = match fields[index].source {
+                FieldSource::Attribute(name) => (name, true),
+                FieldSource::Child(name) => (name, false),
+            };
+            check_qname(name, attribute, namespaces, Vec::new(), 0)?;
+            for prior in 0..index {
+                if fields[prior].field == fields[index].field
+                    || same_source(fields[prior].source, fields[index].source) {
+                    return Result::Err(error(ErrorKind::Serde, 0, "duplicate XML schema field"))
+                }
+            }
+        }
+        Result::Ok(Schema { root, namespaces, fields })
+    }
+
+    pub fn encode[T: serde::Serialize](self: Schema, value: T, limits: Limits) -> Result[
+        string,
+        Error,
+    ] {
+        let serde::Value::Struct(entries) = serde::to_value(value).map_err(
+            |message| error(ErrorKind::Serde, 0, message),
+        )? else {
+            return Result::Err(error(ErrorKind::Serde, 0, "XML schema requires struct value"))
+        };
+        let lookup = HashMap::new();
+        for (name, value) in entries {
+            if lookup.get(name).is_some() {
+                return Result::Err(error(ErrorKind::Serde, 0, "duplicate serialized struct field"))
+            }
+            lookup.set(name, value);
+        }
+        if lookup.len() != self.fields.len() {
+            return Result::Err(
+                error(ErrorKind::Serde, 0, "serialized struct fields differ from schema"),
+            )
+        }
+        let attributes: Vec[Attribute] = Vec::new();
+        let children: Vec[(QName, string)] = Vec::new();
+        for field in self.fields {
+            let value = lookup.get(field.field).ok_or(
+                error(ErrorKind::Serde, 0, "missing serialized field: " + field.field),
+            )?;
+            let text = scalar_text(value, field.kind)?;
+            match field.source {
+                FieldSource::Attribute(name) => attributes.push(Attribute { name, value: text }),
+                FieldSource::Child(name) => children.push((name, text)),
+            }
+        }
+        let tokens: Vec[Token] = Vec::new();
+        tokens.push(
+            Token::Start(Element { name: self.root, attributes, namespaces: self.namespaces }),
+        );
+        for (name, text) in children {
+            tokens.push(
+                Token::Start(Element { name, attributes: Vec::new(), namespaces: Vec::new() }),
+            );
+            if text != "" {
+                tokens.push(Token::Text(text));
+            }
+            tokens.push(Token::End(name));
+        }
+        tokens.push(Token::End(self.root));
+        write_all(tokens, limits)
+    }
+
+    pub fn decode[T: serde::Deserialize](self: Schema, input: Slice[u8], limits: Limits) -> Result[
+        T,
+        Error,
+    ] {
+        let tokens = read_all(input, limits)?;
+        let values: Vec[Option[string]] = Vec::new();
+        for _ in self.fields {
+            values.push(Option::None);
+        }
+        let mut depth = 0;
+        let mut active = -1;
+        let mut child_text: Vec[u8] = Vec::new();
+        for token in tokens {
+            match token {
+                Token::Start(element) => {
+                    if depth == 0 {
+                        if !same_name(element.name, self.root) {
+                            return Result::Err(
+                                error(ErrorKind::Serde, 0, "XML root differs from schema"),
+                            )
+                        }
+                        for attribute in element.attributes {
+                            let mut found = false;
+                            for index in 0..self.fields.len() {
+                                if let FieldSource::Attribute(name) = self.fields[index].source {
+                                    if same_name(name, attribute.name) {
+                                        values[index] = Option::Some(attribute.value);
+                                        found = true;
+                                    }
+                                }
+                            }
+                            if !found {
+                                return Result::Err(
+                                    error(ErrorKind::Serde, 0, "unknown XML attribute"),
+                                )
+                            }
+                        }
+                    } else if depth == 1 {
+                        if element.attributes.len() != 0 {
+                            return Result::Err(
+                                error(ErrorKind::Serde, 0, "child attributes are not mapped"),
+                            )
+                        }
+                        active = -1;
+                        for index in 0..self.fields.len() {
+                            if let FieldSource::Child(name) = self.fields[index].source {
+                                if same_name(name, element.name) {
+                                    active = index;
+                                }
+                            }
+                        }
+                        if active < 0 || values[active].is_some() {
+                            return Result::Err(
+                                error(ErrorKind::Serde, 0, "unknown or repeated XML child"),
+                            )
+                        }
+                        child_text = Vec::new();
+                    } else {
+                        return Result::Err(error(ErrorKind::Serde, 0, "nested child is not mapped"))
+                    }
+                    depth += 1;
+                },
+                Token::End(_) => {
+                    if depth == 2 {
+                        values[active] = Option::Some(string_from_utf8(child_text.copy()).1);
+                        active = -1;
+                    }
+                    depth -= 1;
+                },
+                Token::Text(text) | Token::CData(text) => {
+                    if depth == 2 {
+                        if text.byte_len() > limits.max_decoded_bytes - child_text.len() {
+                            return Result::Err(
+                                error(ErrorKind::Limit, 0, "XML child text exceeds limit"),
+                            )
+                        }
+                        child_text.extend(text.to_bytes());
+                    } else if text.trim() != "" {
+                        return Result::Err(
+                            error(ErrorKind::Serde, 0, "mixed XML content is not mapped"),
+                        )
+                    }
+                },
+                _ => (),
+            }
+        }
+        let fields: Vec[(string, serde::Value)] = Vec::new();
+        for index in 0..self.fields.len() {
+            let raw = values[index].ok_or(
+                error(ErrorKind::Serde, 0, "missing XML field: " + self.fields[index].field),
+            )?;
+            fields.push((self.fields[index].field, scalar_value(raw, self.fields[index].kind)?));
+        }
+        serde::from_value(serde::Value::Struct(fields)).map_err(
+            |message| error(ErrorKind::Serde, 0, message),
+        )
+    }
+}
