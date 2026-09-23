@@ -1,0 +1,104 @@
+package tests;
+
+use ecosystem::xml;
+use ecosystem::xml::{Field, FieldSource, Namespace, QName, ScalarKind, Schema};
+use std::serde::{Deserialize, Serialize};
+use std::testing;
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+struct Record {
+    id: u64,
+    active: bool,
+    label: string,
+}
+
+fn schema() -> Schema {
+    testing::expect_ok(
+        Schema::new(
+            QName { prefix: "p", local: "entry", uri: "urn:entry" },
+            Vec::from_array([Namespace { prefix: "p", uri: "urn:entry" }]),
+            Vec::from_array(
+                [
+                    Field {
+                        field: "id",
+                        source: FieldSource::Attribute(QName { prefix: "", local: "id", uri: "" }),
+                        kind: ScalarKind::Unsigned,
+                    },
+                    Field {
+                        field: "active",
+                        source: FieldSource::Child(
+                            QName { prefix: "p", local: "active", uri: "urn:entry" },
+                        ),
+                        kind: ScalarKind::Bool,
+                    },
+                    Field {
+                        field: "label",
+                        source: FieldSource::Child(
+                            QName { prefix: "p", local: "label", uri: "urn:entry" },
+                        ),
+                        kind: ScalarKind::Text,
+                    },
+                ],
+            ),
+        ),
+        "XML schema",
+    )
+}
+
+#[test]
+fn explicit_serde_schema_round_trip_and_prefix_independence() -> () {
+    let value = Record { id: 42, active: true, label: "a<&🙂" };
+    let encoded = testing::expect_ok(schema().encode(value, xml::Limits::standard()), "XML encode");
+    testing::assert(encoded.contains("id=\"42\""));
+    testing::assert(encoded.contains("a&lt;&amp;🙂"));
+    let decoded: Record = testing::expect_ok(
+        schema().decode(encoded.to_bytes().as_slice(), xml::Limits::standard()),
+        "XML decode",
+    );
+    testing::assert_eq(decoded, value);
+    let alternate = "<e:entry xmlns:e=\"urn:entry\" id=\"42\"><e:active>1</e:active><e:label><![CDATA[a<&🙂]]></e:label></e:entry>";
+    let decoded: Record = testing::expect_ok(
+        schema().decode(alternate.to_bytes().as_slice(), xml::Limits::standard()),
+        "alternate prefix",
+    );
+    testing::assert_eq(decoded, value);
+}
+
+#[test]
+fn serde_schema_rejects_unmapped_and_invalid_fields() -> () {
+    for document in Vec::from_array(
+        [
+            "<p:entry xmlns:p=\"urn:entry\" id=\"42\"><p:active>maybe</p:active><p:label>x</p:label></p:entry>",
+            "<p:entry xmlns:p=\"urn:entry\" id=\"-1\"><p:active>true</p:active><p:label>x</p:label></p:entry>",
+            "<p:entry xmlns:p=\"urn:entry\" id=\"42\"><p:active>true</p:active></p:entry>",
+            "<p:entry xmlns:p=\"urn:entry\" id=\"42\" extra=\"x\"><p:active>true</p:active><p:label>x</p:label></p:entry>",
+            "<p:entry xmlns:p=\"urn:entry\" id=\"42\"><p:active>true</p:active><p:label><deep/></p:label></p:entry>",
+        ],
+    ) {
+        let result: Result[Record, xml::Error] = schema().decode(
+            document.to_bytes().as_slice(),
+            xml::Limits::standard(),
+        );
+        testing::assert_err(result);
+    }
+    testing::assert_err(
+        Schema::new(
+            QName { prefix: "", local: "r", uri: "" },
+            Vec::new(),
+            Vec::from_array(
+                [
+                    Field {
+                        field: "x",
+                        source: FieldSource::Child(QName { prefix: "", local: "a", uri: "" }),
+                        kind: ScalarKind::Text,
+                    },
+                    Field {
+                        field: "x",
+                        source: FieldSource::Child(QName { prefix: "", local: "b", uri: "" }),
+                        kind: ScalarKind::Text,
+                    },
+                ],
+            ),
+        ),
+    );
+}

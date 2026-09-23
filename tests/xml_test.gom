@@ -1,0 +1,160 @@
+package tests;
+
+use ecosystem::xml;
+use ecosystem::xml::{Attribute, Element, ErrorKind, Limits, Namespace, QName, Token};
+use std::testing;
+
+fn parse(value: string, limits: Limits) -> Result[Vec[Token], xml::Error] {
+    let reader = xml::Reader::new(limits)?;
+    let output = reader.feed(value.to_bytes().as_slice())?;
+    output.extend(reader.finish()?);
+    Result::Ok(output)
+}
+
+#[test]
+fn incremental_namespaces_entities_and_writer_round_trip() -> () {
+    let source = "<?xml version=\"1.0\"?><r xmlns=\"urn:a\" xmlns:p=\"urn:p\" id=\"1\" p:id=\"2\">hi &amp; &#x1F642;<![CDATA[<raw>]]><!--ok--><p:child/></r>";
+    let reader = testing::expect_ok(xml::Reader::new(Limits::standard()), "reader");
+    let input = source.to_bytes();
+    let tokens: Vec[Token] = Vec::new();
+    for index in 0..input.len() {
+        tokens.extend(testing::expect_ok(reader.feed(input.slice(index, index + 1)), "chunk"));
+    }
+    tokens.extend(testing::expect_ok(reader.finish(), "finish"));
+    testing::assert_eq(tokens.len(), 8);
+    match tokens[1] {
+        Token::Start(element) => {
+            testing::assert_eq(element.name, QName { prefix: "", local: "r", uri: "urn:a" });
+            testing::assert_eq(element.attributes.len(), 2);
+            testing::assert_eq(element.attributes[0].name.uri, "");
+            testing::assert_eq(element.attributes[1].name.uri, "urn:p");
+        },
+        _ => testing::fail("root start"),
+    }
+    match tokens[2] {
+        Token::Text(value) => testing::assert_eq(value, "hi & 🙂"),
+        _ => testing::fail("decoded text"),
+    }
+    match tokens[3] {
+        Token::CData(value) => testing::assert_eq(value, "<raw>"),
+        _ => testing::fail("CDATA"),
+    }
+    match tokens[5] {
+        Token::Start(element) => testing::assert_eq(element.name.uri, "urn:p"),
+        _ => testing::fail("prefixed child"),
+    }
+    let written = testing::expect_ok(xml::write_all(tokens, Limits::standard()), "write all");
+    testing::assert(written.contains("<p:child></p:child>"));
+    testing::assert(testing::expect_ok(parse(written, Limits::standard()), "reparse") == tokens);
+}
+
+#[test]
+fn unicode_names_attribute_normalization_and_escaping() -> () {
+    let source = "<é xmlns=\"urn:u\" a=\"one\t&amp;&#xA;two\">x\r\ny</é>";
+    let tokens = testing::expect_ok(parse(source, Limits::standard()), "unicode XML");
+    match tokens[0] {
+        Token::Start(element) => {
+            testing::assert_eq(element.name.local, "é");
+            testing::assert_eq(element.name.uri, "urn:u");
+            testing::assert_eq(element.attributes[0].value, "one &\ntwo");
+        },
+        _ => testing::fail("unicode start"),
+    }
+    match tokens[1] {
+        Token::Text(value) => testing::assert_eq(value, "x\ny"),
+        _ => testing::fail("normalized text"),
+    }
+    testing::assert_eq(
+        testing::expect_ok(xml::escape_text("<&>\r", 100), "text escape"),
+        "&lt;&amp;&gt;&#xD;",
+    );
+    testing::assert_eq(
+        testing::expect_ok(xml::escape_attribute("<&\"\t\n", 100), "attribute escape"),
+        "&lt;&amp;&quot;&#x9;&#xA;",
+    );
+}
+
+#[test]
+fn malformed_markup_namespaces_and_entities_fail_recoverably() -> () {
+    let invalid = Vec::from_array(
+        [
+            "<!DOCTYPE r><r/>",
+            "<r>&unknown;</r>",
+            "<r>&#0;</r>",
+            "<r>&#x110000;</r>",
+            "<p:r/>",
+            "<r xmlns:p=\"urn:a\" xmlns:q=\"urn:a\" p:x=\"1\" q:x=\"2\"/>",
+            "<r xmlns:xml=\"urn:wrong\"/>",
+            "<r xmlns:p=\"\"/>",
+            "<r><x></r>",
+            "<r/ ><s/>",
+            "<r><!--bad--comment--></r>",
+            "<r a=\"<\"/>",
+            "<r>bad]]>text</r>",
+        ],
+    );
+    for value in invalid {
+        testing::assert_err(parse(value, Limits::standard()));
+    }
+    let mut limits = Limits::standard();
+    limits.max_depth = 1;
+    testing::assert_err(parse("<a><b/></a>", limits));
+    limits = Limits::standard();
+    limits.max_attributes = 1;
+    testing::assert_err(parse("<a x=\"1\" y=\"2\"/>", limits));
+    limits = Limits::standard();
+    limits.max_pending_bytes = 2;
+    testing::assert_err(parse("<root/>", limits));
+}
+
+#[test]
+fn writer_checks_bindings_balance_and_output_budget() -> () {
+    let mut limits = Limits::standard();
+    limits.max_output_bytes = 5;
+    let writer = testing::expect_ok(xml::Writer::new(limits), "writer");
+    testing::assert_err(
+        writer.write(
+            Token::Start(
+                Element {
+                    name: QName { prefix: "", local: "long", uri: "" },
+                    attributes: Vec::new(),
+                    namespaces: Vec::new(),
+                },
+            ),
+        ),
+    );
+    let writer = testing::expect_ok(xml::Writer::new(Limits::standard()), "writer");
+    testing::assert_err(
+        writer.write(
+            Token::Start(
+                Element {
+                    name: QName { prefix: "p", local: "a", uri: "urn:p" },
+                    attributes: Vec::new(),
+                    namespaces: Vec::new(),
+                },
+            ),
+        ),
+    );
+    let writer = testing::expect_ok(xml::Writer::new(Limits::standard()), "writer");
+    testing::assert_ok(
+        writer.write(
+            Token::Start(
+                Element {
+                    name: QName { prefix: "p", local: "a", uri: "urn:p" },
+                    attributes: Vec::from_array(
+                        [Attribute { name: QName { prefix: "", local: "id", uri: "" }, value: "1" }],
+                    ),
+                    namespaces: Vec::from_array([Namespace { prefix: "p", uri: "urn:p" }]),
+                },
+            ),
+        ),
+    );
+    testing::assert_err(writer.finish());
+    testing::assert_eq(
+        testing::expect_err(
+            writer.write(Token::End(QName { prefix: "", local: "a", uri: "" })),
+            "wrong end",
+        ).kind,
+        ErrorKind::State,
+    );
+}
