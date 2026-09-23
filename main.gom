@@ -1,0 +1,55 @@
+package main;
+
+use ecosystem::xml;
+use ecosystem::xml::{Field, FieldSource, QName, ScalarKind, Schema};
+use std::serde::{Deserialize, Serialize};
+use std::testing;
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct Item {
+    pub id: u64,
+    pub title: string,
+}
+
+fn schema() -> Schema {
+    testing::expect_ok(
+        Schema::new(
+            QName { prefix: "", local: "item", uri: "" },
+            Vec::new(),
+            Vec::from_array(
+                [
+                    Field {
+                        field: "id",
+                        source: FieldSource::Attribute(QName { prefix: "", local: "id", uri: "" }),
+                        kind: ScalarKind::Unsigned,
+                    },
+                    Field {
+                        field: "title",
+                        source: FieldSource::Child(QName { prefix: "", local: "title", uri: "" }),
+                        kind: ScalarKind::Text,
+                    },
+                ],
+            ),
+        ),
+        "schema",
+    )
+}
+
+pub fn exercise() -> () {
+    let expected = Item { id: 7, title: "GoML & XML" };
+    let encoded = testing::expect_ok(schema().encode(expected, xml::Limits::standard()), "encode");
+    testing::assert(encoded.contains("GoML &amp; XML"));
+    let decoded: Item = testing::expect_ok(
+        schema().decode(encoded.to_bytes().as_slice(), xml::Limits::standard()),
+        "decode",
+    );
+    testing::assert_eq(decoded, expected);
+    testing::assert_err(
+        xml::read_all("<!DOCTYPE x><x/>".to_bytes().as_slice(), xml::Limits::standard()),
+    );
+}
+
+fn main() -> () {
+    exercise();
+    println("xml consumer: ok");
+}
