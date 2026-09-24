@@ -22,4 +22,4 @@ fn namespaced_tokens() -> Result[Vec[xml::Token], xml::Error] {
 
 The optional `Schema` uses `std::serde::Serialize` and `Deserialize` through an explicit mapping of flat struct fields to root attributes or direct child text elements. `ScalarKind` supports text, booleans, signed integers, and unsigned integers. The mapping rejects unknown, missing, repeated, mixed, and nested fields. Namespace matching uses expanded URI/local names, independent of a document's chosen prefix. It does not infer a mapping from GoML reflection or attempt general XML-to-object conversion; optional values, repeated children, nested structs, and mixed content remain outside this schema adapter.
 
-Run `just ecosystem-test xml` from the repository root to verify the library, independent versioned consumer, and cached build.
+Run `(cd ../verification && just ecosystem-test xml)` from this library repository to verify the library, independent versioned consumer, and cached build.
