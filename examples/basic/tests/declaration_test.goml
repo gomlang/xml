@@ -1,0 +1,101 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+fn declaration_read(source: string, width: isize) -> Result[Vec[xml::Token], xml::Error] {
+    let reader = xml::Reader::new(xml::Limits::standard())?;
+    let bytes = source.to_bytes();
+    let tokens = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        let end = if at + width < bytes.len() {
+            at + width
+        } else {
+            bytes.len()
+        };
+        tokens.extend(reader.feed(bytes.slice(at, end))?);
+        at = end;
+    }
+    tokens.extend(reader.finish()?);
+    Result::Ok(tokens)
+}
+
+#[test]
+fn declarations_validate_order_values_and_exact_document_start_across_chunks() -> () {
+    for prefix in Vec::from_array(["", "\ufeff"]) {
+        for declaration in Vec::from_array(
+            [
+                "<?xml version='1.0'?>",
+                "<?xml\tversion = \"1.23\" encoding='uTf-8' standalone='no' \r\n?>",
+                "<?xml version='1.0' standalone='yes'?>",
+            ],
+        ) {
+            let source = prefix + declaration
+                + "<?xml-stylesheet type='text/xsl'?><r>&#xAf;&#175;</r>";
+            let expected = testing::expect_ok(
+                declaration_read(source, source.byte_len()),
+                "whole declaration",
+            );
+            for width in 1..source.byte_len() + 1 {
+                testing::assert(
+                    testing::expect_ok(declaration_read(source, width), "fragmented declaration")
+                        == expected,
+                );
+            }
+            let text = testing::expect_ok(
+                xml::write_all(expected, xml::Limits::standard()),
+                "write declaration",
+            );
+            testing::assert(
+                testing::expect_ok(declaration_read(text, 1), "read written declaration")
+                    == expected,
+            );
+        }
+    }
+    for declaration in Vec::from_array(
+        [
+            "<?xml?>",
+            "<?xml encoding='UTF-8'?>",
+            "<?xml version='1.0'version='1.0'?>",
+            "<?xml version='1.0' version='1.0'?>",
+            "<?xml version='1.0' standalone='yes' encoding='UTF-8'?>",
+            "<?xml version='1.0' standalone='YES'?>",
+            "<?xml version='1.0' other='x'?>",
+            "<?xml version='1.0' encoding='UTF-16'?>",
+            "<?xml version=1.0?>",
+            "<?xml version='2.0'?>",
+            "<?xml version='1.'?>",
+            "<?xml version='1.a'?>",
+            "<?xml version='1.0'\u00a0?>",
+            "<?xml \u00a0version='1.0'?>",
+            "<?XML version='1.0'?>",
+            " <?xml version='1.0'?>",
+            "\ufeff <?xml version='1.0'?>",
+            "<?xml version='1.0'?><?xml version='1.0'?>",
+            "<!--x--><?xml version='1.0'?>",
+        ],
+    ) {
+        for width in Vec::from_array([1, 1000]) {
+            testing::assert_err(declaration_read(declaration + "<r/>", width));
+        }
+    }
+    testing::assert_err(declaration_read("<r>&#X41;</r>", 1));
+    testing::assert_err(declaration_read("<r a='&#X41;'/>", 1));
+}
+
+#[test]
+fn writer_rejects_invalid_declaration_before_emitting_it() -> () {
+    for value in Vec::from_array(
+        [
+            "",
+            "encoding='UTF-8'",
+            "version='1.0' standalone='maybe'",
+            "version='1.0' encoding='ascii'",
+            "version='1.0'version='1.0'",
+        ],
+    ) {
+        let writer = testing::expect_ok(xml::Writer::new(xml::Limits::standard()), "writer");
+        testing::assert_err(writer.write(xml::Token::Instruction("xml", value)));
+    }
+}
