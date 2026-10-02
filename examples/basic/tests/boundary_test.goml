@@ -1,0 +1,16 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+#[test]
+fn downstream_empty_comment_round_trip_and_document_grammar() -> () {
+    let tokens = testing::expect_ok(
+        xml::read_all("<!----><r/><!---->".to_bytes().as_slice(), xml::Limits::standard()),
+        "empty comments",
+    );
+    let text = testing::expect_ok(xml::write_all(tokens, xml::Limits::standard()), "round trip");
+    testing::assert_eq(text, "<!----><r></r><!---->");
+    testing::assert_err(xml::read_all("&#32;<r/>".to_bytes().as_slice(), xml::Limits::standard()));
+    testing::assert_err(xml::read_all("<r></ r>".to_bytes().as_slice(), xml::Limits::standard()));
+}

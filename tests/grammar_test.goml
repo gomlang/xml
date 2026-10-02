@@ -1,0 +1,73 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+fn grammar_chunks(source: string, width: isize) -> Result[Vec[xml::Token], xml::Error] {
+    let input = source.to_bytes();
+    let reader = xml::Reader::new(xml::Limits::standard())?;
+    let tokens = Vec::new();
+    let mut start = 0;
+    while start < input.len() {
+        let end = if start + width < input.len() {
+            start + width
+        } else {
+            input.len()
+        };
+        tokens.extend(reader.feed(input.slice(start, end))?);
+        start = end;
+    }
+    tokens.extend(reader.finish()?);
+    Result::Ok(tokens)
+}
+
+#[test]
+fn short_comments_are_valid_at_every_document_position_and_chunk_boundary() -> () {
+    for source in Vec::from_array(["<!----><r/>", "<r><!----></r>", "<r/><!---->", "<r/><!--a-->"]) {
+        let expected = testing::expect_ok(
+            grammar_chunks(source, source.byte_len()),
+            "whole document",
+        );
+        for width in 1..source.byte_len() + 1 {
+            testing::assert(
+                testing::expect_ok(grammar_chunks(source, width), "chunked document") == expected,
+            );
+        }
+        let output = testing::expect_ok(
+            xml::write_all(expected, xml::Limits::standard()),
+            "write comment",
+        );
+        testing::assert(
+            testing::expect_ok(grammar_chunks(output, 1), "read writer output") == expected,
+        );
+    }
+}
+
+#[test]
+fn document_whitespace_and_end_tag_grammar_are_xml_specific() -> () {
+    for source in Vec::from_array(
+        [
+            "&#32;<r/>",
+            "<r/>&#10;",
+            "\u00a0<r/>",
+            "<r/>\u2003",
+            "<r></ r>",
+            "<r></\tr>",
+            "<r></r\u00a0>",
+            "<r></r x>",
+        ],
+    ) {
+        for width in Vec::from_array([1, source.byte_len()]) {
+            let problem = testing::expect_err(
+                grammar_chunks(source, width),
+                "invalid document grammar",
+            );
+            testing::assert(
+                problem.kind == xml::ErrorKind::Syntax || problem.kind == xml::ErrorKind::Namespace,
+            );
+        }
+    }
+    let valid = " \t\r\n<r>&#32;\u00a0</r \t\r\n> \t\r\n";
+    testing::assert_ok(grammar_chunks(valid, 1));
+    testing::assert_ok(grammar_chunks(valid, valid.byte_len()));
+}
