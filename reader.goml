@@ -20,6 +20,7 @@ struct ReaderState {
     pending: Vec[u8],
     offset: isize,
     received: isize,
+    declaration_offset: isize,
     decoded: isize,
     tokens: isize,
     open: Vec[QName],
@@ -40,6 +41,7 @@ fn initial_reader_state() -> ReaderState {
         pending: Vec::new(),
         offset: 0,
         received: 0,
+        declaration_offset: 0,
         decoded: 0,
         tokens: 0,
         open: Vec::new(),
@@ -190,7 +192,19 @@ fn next_raw(data: Vec[u8], at: isize, offset: isize, limits: Limits, final_input
                 split += 1;
             }
             let target = body.byte_slice(0, split);
-            let payload = body.byte_slice(split, body.byte_len()).trim();
+            let payload = if target == "xml" {
+                let mut start = split;
+                let mut end = body.byte_len();
+                while start < end && space(body.byte_get(start)) {
+                    start += 1;
+                }
+                while end > start && space(body.byte_get(end - 1)) {
+                    end -= 1;
+                }
+                body.byte_slice(start, end)
+            } else {
+                body.byte_slice(split, body.byte_len()).trim()
+            };
             return Result::Ok(Option::Some((RawToken::Instruction(target, payload), end + 2 - at)))
         }
         if data.len() - at > limits.max_token_bytes {
@@ -464,8 +478,12 @@ fn apply_raw(raw: RawToken, state: ReaderState, limits: Limits, offset: isize) -
         RawToken::Instruction(target, raw) => {
             let _ = split_name(target, offset)?;
             if target.to_ascii_lowercase() == "xml"
-                && (target != "xml" || state.root_seen || state.tokens != 0 || offset > 3) {
+                && (target != "xml" || state.root_seen || state.tokens != 0
+                    || offset != state.declaration_offset) {
                 return Result::Err(error(ErrorKind::Syntax, offset, "XML declaration is misplaced"))
+            }
+            if target == "xml" {
+                declaration(raw, offset)?;
             }
             let value = plain(raw, offset, limits.max_token_bytes)?;
             state.decoded = charge(state.decoded, value.byte_len(), limits, offset)?;
@@ -518,6 +536,7 @@ impl Reader {
             }
             if state.pending.len() >= 3 && state.pending[1] == 187 && state.pending[2] == 191 {
                 cursor = 3;
+                state.declaration_offset = 3;
             }
         }
         while cursor < state.pending.len() {

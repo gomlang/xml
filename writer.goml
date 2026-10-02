@@ -138,6 +138,9 @@ fn write_token(token: Token, state: WriterState, limits: Limits) -> Result[
                     error(ErrorKind::Syntax, state.output, "XML declaration is misplaced"),
                 )
             }
+            if target == "xml" {
+                declaration(value, state.output)?;
+            }
             if value.find("?>").is_some() {
                 return Result::Err(
                     error(ErrorKind::Syntax, state.output, "invalid XML instruction"),

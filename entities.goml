@@ -41,7 +41,7 @@ fn reference(body: string, offset: isize) -> Result[string, Error] {
     if !body.starts_with("#") {
         return Result::Err(error(ErrorKind::Entity, offset, "unknown XML entity"))
     }
-    let hexadecimal = body.starts_with("#x") || body.starts_with("#X");
+    let hexadecimal = body.starts_with("#x");
     let start = if hexadecimal {
         2
     } else {
