@@ -1,6 +1,6 @@
 package tests;
 
-use consumer::xml as app;
+use ecosystem::xml::examples::basic as app;
 use ecosystem::xml;
 use std::testing;
 
