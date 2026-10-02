@@ -9,7 +9,22 @@ including at document end and across input chunks. Outside the root, only litera
 XML whitespace (space, tab, CR, LF), comments, and processing instructions are
 accepted; character references and other Unicode whitespace are not document
 whitespace. End tags require a name immediately after `</`, with only XML
-whitespace allowed between that name and `>`. UTF-8 validity and XML character ranges are checked. DTDs, custom or external entities, validation against DTD/XSD, XInclude, and non-UTF-8 encodings are deliberately unsupported. XML declarations are exposed as processing instructions; their pseudo-attributes are not interpreted. These choices avoid implicit entity expansion or network/file access. See [XML 1.0](https://www.w3.org/TR/xml/) for the grammar.
+whitespace allowed between that name and `>`. UTF-8 validity and XML character ranges are checked. DTDs, custom or external entities, validation against DTD/XSD, XInclude, and non-UTF-8 encodings are deliberately unsupported. XML declarations are exposed as processing instructions; their pseudo-attributes are validated without changing parser modes. These choices avoid implicit entity expansion or network/file access. See [XML 1.0](https://www.w3.org/TR/xml/) for the grammar.
+
+XML declarations use the XML 1.0 Fifth Edition grammar: required `version`, then
+optional `encoding`, then optional `standalone`, with XML whitespace, quoted
+values and no duplicate/unknown fields. A declaration must be the first markup
+at byte zero, or immediately follow the initial UTF-8 BOM; preceding whitespace
+is not allowed. Only UTF-8 encoding names (case-insensitive) are supported.
+Version numbers matching `1.` followed by digits are processed with XML 1.0
+rules, as specified by the Fifth Edition. `standalone` accepts exactly `yes` or
+`no`; it does not enable DTD processing. The writer applies the same checks to
+`Token::Instruction("xml", value)` before output. Extended targets such as
+`xml-stylesheet` remain ordinary processing instructions. Hexadecimal character
+references require the lowercase `x` in `&#x...;`; hexadecimal digits may use
+either case. See [XML declarations](https://www.w3.org/TR/xml/#sec-prolog-dtd)
+and [character references](https://www.w3.org/TR/xml/#sec-references).
+
 
 ```goml
 use ecosystem::xml;
@@ -40,17 +55,3 @@ goml verify --timeout 300s
 ```
 
 `goml test` builds the example and runs its tests. `goml verify` repeats the example checks as an independent module against an isolated registry snapshot. `(cd ../verification && just ecosystem-test xml)` also retains the library-specific smoke and compatibility checks.
-
-XML declarations use the XML 1.0 Fifth Edition grammar: required `version`, then
-optional `encoding`, then optional `standalone`, with XML whitespace, quoted
-values and no duplicate/unknown fields. A declaration must be the first markup
-at byte zero, or immediately follow the initial UTF-8 BOM; preceding whitespace
-is not allowed. Only UTF-8 encoding names (case-insensitive) are supported.
-Version numbers matching `1.` followed by digits are processed with XML 1.0
-rules, as specified by the Fifth Edition. `standalone` accepts exactly `yes` or
-`no`; it does not enable DTD processing. The writer applies the same checks to
-`Token::Instruction("xml", value)` before output. Extended targets such as
-`xml-stylesheet` remain ordinary processing instructions. Hexadecimal character
-references require the lowercase `x` in `&#x...;`; hexadecimal digits may use
-either case. See [XML declarations](https://www.w3.org/TR/xml/#sec-prolog-dtd)
-and [character references](https://www.w3.org/TR/xml/#sec-references).
