@@ -132,7 +132,7 @@ fn next_raw(data: Vec[u8], at: isize, offset: isize, limits: Limits, final_input
         return Result::Ok(Option::None)
     }
     if data[at + 1] == 33 {
-        if data.len() - at < 9 {
+        if data.len() - at < 4 {
             return Result::Ok(Option::None)
         }
         if begins(data, at, "<!--") {
@@ -163,6 +163,8 @@ fn next_raw(data: Vec[u8], at: isize, offset: isize, limits: Limits, final_input
                     ),
                 )
             }
+        } else if data.len() - at < 9 && begins(data, at, "<![") {
+            return Result::Ok(Option::None)
         } else {
             return Result::Err(
                 error(ErrorKind::Syntax, offset + at, "DTD and markup declarations are disabled"),
@@ -406,7 +408,11 @@ fn apply_raw(raw: RawToken, state: ReaderState, limits: Limits, offset: isize) -
             if state.open.len() == 0 {
                 return Result::Err(error(ErrorKind::Syntax, offset, "unexpected XML end tag"))
             }
-            let raw_name = body.trim();
+            let mut end = body.byte_len();
+            while end > 0 && space(body.byte_get(end - 1)) {
+                end -= 1;
+            }
+            let raw_name = body.byte_slice(0, end);
             let name = qualified(raw_name, false, Vec::new(), state.scopes, offset)?;
             let expected = state.open[state.open.len() - 1];
             if name != expected {
@@ -420,15 +426,21 @@ fn apply_raw(raw: RawToken, state: ReaderState, limits: Limits, offset: isize) -
             tokens.push(Token::End(name));
         },
         RawToken::Text(raw) => {
+            if state.open.len() == 0 {
+                for value in raw.to_bytes() {
+                    if !space(value) {
+                        return Result::Err(
+                            error(ErrorKind::Syntax, offset, "text outside XML root"),
+                        )
+                    }
+                }
+                return Result::Ok((tokens, state))
+            }
             if raw.find("]]>").is_some() {
                 return Result::Err(error(ErrorKind::Syntax, offset, "CDATA terminator in text"))
             }
             let value = decode_entities(raw, false, offset, limits.max_token_bytes)?;
-            if state.open.len() == 0 {
-                if value.trim() != "" {
-                    return Result::Err(error(ErrorKind::Syntax, offset, "text outside XML root"))
-                }
-            } else if value != "" {
+            if value != "" {
                 state.decoded = charge(state.decoded, value.byte_len(), limits, offset)?;
                 tokens.push(Token::Text(value));
             }

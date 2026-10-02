@@ -4,7 +4,12 @@
 
 Tokens cover start/end elements, text, comments, CDATA, and processing instructions. `QName` contains prefix, local name, and resolved namespace URI. Each start element carries attributes and namespace declarations. The parser handles default and prefixed namespace scopes, the predefined `xml` prefix, duplicate expanded-attribute checks, namespace rebinding, and XML 1.0 name characters. Unprefixed attributes remain outside the default namespace, as required by [Namespaces in XML 1.0](https://www.w3.org/TR/xml-names/). The writer requires each QName's URI to agree with its in-scope binding.
 
-Text and attributes decode the five predefined entities and decimal/hexadecimal character references. The writer escapes XML-significant characters and preserves attribute whitespace through numeric references. Literal input CR and CRLF are normalized to LF; literal attribute tab/newline/CR become spaces. Comments and CDATA remain separate tokens. UTF-8 validity and XML character ranges are checked. DTDs, custom or external entities, validation against DTD/XSD, XInclude, and non-UTF-8 encodings are deliberately unsupported. XML declarations are exposed as processing instructions; their pseudo-attributes are not interpreted. These choices avoid implicit entity expansion or network/file access. See [XML 1.0](https://www.w3.org/TR/xml/) for the grammar.
+Text and attributes decode the five predefined entities and decimal/hexadecimal character references. The writer escapes XML-significant characters and preserves attribute whitespace through numeric references. Literal input CR and CRLF are normalized to LF; literal attribute tab/newline/CR become spaces. Comments and CDATA remain separate tokens. Empty comments are accepted,
+including at document end and across input chunks. Outside the root, only literal
+XML whitespace (space, tab, CR, LF), comments, and processing instructions are
+accepted; character references and other Unicode whitespace are not document
+whitespace. End tags require a name immediately after `</`, with only XML
+whitespace allowed between that name and `>`. UTF-8 validity and XML character ranges are checked. DTDs, custom or external entities, validation against DTD/XSD, XInclude, and non-UTF-8 encodings are deliberately unsupported. XML declarations are exposed as processing instructions; their pseudo-attributes are not interpreted. These choices avoid implicit entity expansion or network/file access. See [XML 1.0](https://www.w3.org/TR/xml/) for the grammar.
 
 ```goml
 use ecosystem::xml;
