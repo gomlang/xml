@@ -40,7 +40,7 @@ fn namespaced_tokens() -> Result[Vec[xml::Token], xml::Error] {
 
 `Limits::standard()` caps total input and decoded text at 16 MiB, pending and individual tokens at 1 MiB, output at 16 MiB, depth at 128, attributes per element at 1,024, and emitted tokens at 1,000,000. All limits can be lowered. A caller must feed chunks that fit the pending limit; long unclosed text or markup fails rather than growing without bound. Syntax, namespace, entity, UTF-8, limit, state, and serde errors are recoverable `Error` values with a byte offset for parser failures.
 
-The optional `Schema` uses `std::serde::Serialize` and `Deserialize` through an explicit mapping of flat struct fields to root attributes or direct child text elements. `ScalarKind` supports text, booleans, signed integers, and unsigned integers. Fields are required by default. The mapping rejects unknown, repeated, mixed and nested fields. Namespace matching uses expanded URI/local names, independent of a document's chosen prefix. Repeated children, nested structs and mixed content remain outside this schema adapter.
+The optional `Schema` uses `std::serde::Serialize` and `Deserialize` through an explicit mapping of flat struct fields to root attributes or direct child text elements. `ScalarKind` supports text, booleans, signed integers, and unsigned integers. Fields are required by default. The mapping rejects unknown, unmapped repeated, mixed and nested fields. Namespace matching uses expanded URI/local names, independent of a document's chosen prefix. Nested structs and mixed content remain outside this schema adapter.
 
 `schema.with_optional_fields(names)` returns a schema whose selected struct
 fields map to `Option[T]`; it replaces the previous optional selection. Unknown
@@ -53,6 +53,24 @@ fields remain required. This is an explicit omission mapping and does not add
 optional selection copies names, so later caller mutations cannot change the
 validated mapping. Existing `Schema::new` and public `Field` literals remain
 source compatible.
+
+`schema.with_repeated_fields(names)` selects direct child fields mapped to
+`Vec[T]` (or another Serde sequence of the selected scalar kind). The selection
+replaces any previous repeated selection and is copied. Unknown names,
+attributes, duplicates and overlap with optional fields are rejected in either
+configuration order. Missing XML children and serializer-omitted fields become
+empty sequences; an empty sequence emits no elements. Every present member is
+validated, and an empty text element remains a member containing `""`.
+Decoding preserves member order within each field, including interleaved fields
+and alternate namespace prefixes. Encoding groups children in schema field
+order. Nested values, child attributes and `Option[Vec[T]]` are not mapped.
+
+The encoder sends each child directly through the bounded token writer instead
+of accumulating a second token tree. Existing output-byte, token-count, depth
+and per-token limits apply to repeated children; decoding retains the reader's
+input and token bounds. Caller-owned values and Serde's intermediate value tree
+are not covered by the output byte limit. Default required fields and opt-in
+optional fields retain their existing cardinality.
 
 Run `(cd ../verification && just ecosystem-test xml)` from this library repository to verify the library, example and its independent downstream verification, and cached build.
 

@@ -1,0 +1,230 @@
+package tests;
+
+use ecosystem::xml;
+use xml::{Schema, Field, FieldSource, ScalarKind, QName, Namespace};
+use std::serde::{Serialize, Deserialize};
+use std::testing;
+
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+struct RepeatedRecord {
+    id: u64,
+    label: Option[string],
+    items: Vec[string],
+    amounts: Vec[i64],
+    flags: Vec[bool],
+}
+
+#[derive(Serialize)]
+struct RepeatedOmissions {
+    id: u64,
+}
+
+fn repeated_schema() -> Schema {
+    let schema = testing::expect_ok(
+        Schema::new(
+            QName { prefix: "p", local: "entry", uri: "urn:entry" },
+            Vec::from_array([Namespace { prefix: "p", uri: "urn:entry" }]),
+            Vec::from_array(
+                [
+                    Field {
+                        field: "id",
+                        source: FieldSource::Attribute(QName { prefix: "", local: "id", uri: "" }),
+                        kind: ScalarKind::Unsigned,
+                    },
+                    Field {
+                        field: "label",
+                        source: FieldSource::Child(
+                            QName { prefix: "p", local: "label", uri: "urn:entry" },
+                        ),
+                        kind: ScalarKind::Text,
+                    },
+                    Field {
+                        field: "items",
+                        source: FieldSource::Child(
+                            QName { prefix: "p", local: "item", uri: "urn:entry" },
+                        ),
+                        kind: ScalarKind::Text,
+                    },
+                    Field {
+                        field: "amounts",
+                        source: FieldSource::Child(
+                            QName { prefix: "p", local: "amount", uri: "urn:entry" },
+                        ),
+                        kind: ScalarKind::Signed,
+                    },
+                    Field {
+                        field: "flags",
+                        source: FieldSource::Child(
+                            QName { prefix: "p", local: "flag", uri: "urn:entry" },
+                        ),
+                        kind: ScalarKind::Bool,
+                    },
+                ],
+            ),
+        ),
+        "schema",
+    );
+    let schema = testing::expect_ok(
+        schema.with_optional_fields(Vec::from_array(["label"])),
+        "optional",
+    );
+    testing::expect_ok(
+        schema.with_repeated_fields(Vec::from_array(["items", "amounts", "flags"])),
+        "repeated",
+    )
+}
+
+#[test]
+fn repeated_children_preserve_empty_values_member_order_and_namespaces() -> () {
+    let input = "<e:entry xmlns:e=\"urn:entry\" id=\"7\"><e:item/><e:amount>-9223372036854775808</e:amount><e:item>a<![CDATA[<&]]>界</e:item><e:flag>1</e:flag><e:item>last</e:item><e:amount>9223372036854775807</e:amount><e:flag>false</e:flag></e:entry>";
+    let value: RepeatedRecord = testing::expect_ok(
+        repeated_schema().decode(input.to_bytes().as_slice(), xml::Limits::standard()),
+        "decode",
+    );
+    testing::assert(value.items == Vec::from_array(["", "a<&界", "last"]));
+    testing::assert(value.amounts == Vec::from_array([-9223372036854775808, 9223372036854775807]));
+    testing::assert(value.flags == Vec::from_array([true, false]));
+    testing::assert(value.label.is_none());
+    let wire = testing::expect_ok(
+        repeated_schema().encode(value, xml::Limits::standard()),
+        "encode",
+    );
+    testing::assert_eq(
+        wire,
+        "<p:entry xmlns:p=\"urn:entry\" id=\"7\"><p:item></p:item><p:item>a&lt;&amp;界</p:item><p:item>last</p:item><p:amount>-9223372036854775808</p:amount><p:amount>9223372036854775807</p:amount><p:flag>true</p:flag><p:flag>false</p:flag></p:entry>",
+    );
+    let decoded: RepeatedRecord = testing::expect_ok(
+        repeated_schema().decode(wire.to_bytes().as_slice(), xml::Limits::standard()),
+        "round trip",
+    );
+    testing::assert(decoded == value);
+}
+
+#[test]
+fn missing_repeated_fields_become_empty_sequences_in_both_directions() -> () {
+    let wire = testing::expect_ok(
+        repeated_schema().encode(RepeatedOmissions { id: 1 }, xml::Limits::standard()),
+        "serializer omission",
+    );
+    testing::assert_eq(wire, "<p:entry xmlns:p=\"urn:entry\" id=\"1\"></p:entry>");
+    let value: RepeatedRecord = testing::expect_ok(
+        repeated_schema().decode(
+            b"<entry xmlns=\"urn:entry\" id=\"1\"/>".as_slice(),
+            xml::Limits::standard(),
+        ),
+        "missing",
+    );
+    testing::assert(value.items.is_empty() && value.amounts.is_empty() && value.flags.is_empty());
+    testing::assert_eq(
+        testing::expect_ok(repeated_schema().encode(value, xml::Limits::standard()), "empty"),
+        wire,
+    );
+}
+
+#[test]
+fn repeated_configuration_is_checked_copied_and_does_not_change_required_defaults() -> () {
+    let schema = repeated_schema();
+    for fields in[
+        Vec::from_array(["id"]),
+        Vec::from_array(["label"]),
+        Vec::from_array(["missing"]),
+        Vec::from_array(["items", "items"]),
+    ] {
+        testing::assert_err(schema.with_repeated_fields(fields));
+    }
+    testing::assert_err(schema.with_optional_fields(Vec::from_array(["items"])));
+    let names = Vec::from_array(["items", "amounts", "flags"]);
+    let detached = testing::expect_ok(schema.with_repeated_fields(names), "copy");
+    names.clear();
+    let input = b"<entry xmlns=\"urn:entry\" id=\"1\"><item>a</item><item>b</item></entry>";
+    let result: Result[RepeatedRecord, xml::Error] = detached.decode(
+        input.as_slice(),
+        xml::Limits::standard(),
+    );
+    testing::assert_ok(result);
+    let required = testing::expect_ok(schema.with_repeated_fields(Vec::new()), "clear");
+    let result: Result[RepeatedRecord, xml::Error] = required.decode(
+        input.as_slice(),
+        xml::Limits::standard(),
+    );
+    testing::assert_err(result);
+    let result: Result[RepeatedRecord, xml::Error] = schema.decode(
+        input.as_slice(),
+        xml::Limits::standard(),
+    );
+    testing::assert_ok(result);
+}
+
+#[test]
+fn repeated_scalars_reject_invalid_members_unknown_content_and_wrong_serde_shapes() -> () {
+    for body in[
+        "<amount>9223372036854775808</amount>",
+        "<amount>1.5</amount>",
+        "<flag>maybe</flag>",
+        "<item><nested/></item>",
+        "<item attr=\"x\"/>",
+        "<unknown/>",
+        "<label>x</label><label>y</label>",
+        "<item xmlns=\"urn:other\"/>",
+    ] {
+        let input = "<entry xmlns=\"urn:entry\" id=\"1\">" + body + "</entry>";
+        let result: Result[RepeatedRecord, xml::Error] = repeated_schema().decode(
+            input.to_bytes().as_slice(),
+            xml::Limits::standard(),
+        );
+        testing::assert_err(result);
+    }
+    let bad = WrongRepeatedShape { id: 1, items: "single" };
+    testing::assert_err(repeated_schema().encode(bad, xml::Limits::standard()));
+    let required = testing::expect_ok(
+        repeated_schema().with_repeated_fields(Vec::new()),
+        "required",
+    );
+    let value = RepeatedRecord {
+        id: 1,
+        label: Option::None,
+        items: Vec::from_array(["x"]),
+        amounts: Vec::new(),
+        flags: Vec::new(),
+    };
+    testing::assert_err(required.encode(value, xml::Limits::standard()));
+}
+
+#[derive(Serialize)]
+struct WrongRepeatedShape {
+    id: u64,
+    items: string,
+}
+
+#[test]
+fn repeated_output_obeys_exact_token_and_byte_limits() -> () {
+    let value = RepeatedRecord {
+        id: 1,
+        label: Option::None,
+        items: Vec::from_array(["x", ""]),
+        amounts: Vec::new(),
+        flags: Vec::new(),
+    };
+    let schema = repeated_schema();
+    let wire = testing::expect_ok(schema.encode(value, xml::Limits::standard()), "wire");
+    let limits = xml::Limits {
+        max_output_bytes: wire.byte_len(),
+        max_tokens: 7,
+        ..xml::Limits::standard(),
+    };
+    testing::assert_ok(schema.encode(value, limits));
+    testing::assert_err(schema.encode(value, xml::Limits { max_tokens: 6, ..limits }));
+    testing::assert_err(
+        schema.encode(value, xml::Limits { max_output_bytes: wire.byte_len() - 1, ..limits }),
+    );
+    let decoded: Result[RepeatedRecord, xml::Error] = schema.decode(
+        wire.to_bytes().as_slice(),
+        xml::Limits { max_tokens: 6, ..xml::Limits::standard() },
+    );
+    testing::assert_err(decoded);
+    let items = Vec::new();
+    for _ in 0..1000 {
+        items.push("x");
+    }
+    testing::assert_err(schema.encode(RepeatedRecord { items, ..value }, limits));
+}

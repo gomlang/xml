@@ -28,6 +28,7 @@ pub struct Schema {
     namespaces: Vec[Namespace],
     fields: Vec[Field],
     optional_fields: Vec[string],
+    repeated_fields: Vec[string],
 }
 
 fn same_name(left: QName, right: QName) -> bool {
@@ -141,6 +142,7 @@ impl Schema {
                 namespaces: namespaces.copy(),
                 fields: fields.copy(),
                 optional_fields: Vec::new(),
+                repeated_fields: Vec::new(),
             },
         )
     }
@@ -154,14 +156,84 @@ impl Schema {
                     found = true;
                 }
             }
-            if !found || selected.contains(name) {
+            if !found || selected.contains(name) || self.repeated_fields.contains(name) {
                 return Result::Err(
-                    error(ErrorKind::Serde, 0, "unknown or duplicate optional field: " + name),
+                    error(
+                        ErrorKind::Serde,
+                        0,
+                        "unknown, duplicate or repeated optional field: " + name,
+                    ),
                 )
             }
             selected.push(name);
         }
         Result::Ok(Schema { optional_fields: selected, ..self })
+    }
+
+    pub fn with_repeated_fields(self: Schema, names: Vec[string]) -> Result[Schema, Error] {
+        let selected: Vec[string] = Vec::new();
+        for name in names {
+            let mut child = false;
+            for field in self.fields {
+                if field.field == name {
+                    if let FieldSource::Child(_) = field.source {
+                        child = true;
+                    }
+                }
+            }
+            if !child || selected.contains(name) || self.optional_fields.contains(name) {
+                return Result::Err(
+                    error(
+                        ErrorKind::Serde,
+                        0,
+                        "repeated field must be a distinct non-optional child: " + name,
+                    ),
+                )
+            }
+            selected.push(name);
+        }
+        Result::Ok(Schema { repeated_fields: selected, ..self })
+    }
+
+    fn field_values(self: Schema, field: Field, lookup: HashMap[string, serde::Value]) -> Result[
+        Vec[serde::Value],
+        Error,
+    ] {
+        if self.repeated_fields.contains(field.field) {
+            let Some(value) = lookup.get(field.field) else {
+                return Result::Ok(Vec::new())
+            };
+            let serde::Value::Sequence(values) = value else {
+                return Result::Err(
+                    error(
+                        ErrorKind::Serde,
+                        0,
+                        "repeated XML field requires a sequence: " + field.field,
+                    ),
+                )
+            };
+            return Result::Ok(values)
+        }
+        if self.optional_fields.contains(field.field) {
+            let Some(value) = lookup.get(field.field) else {
+                return Result::Ok(Vec::new())
+            };
+            let serde::Value::Optional(values) = value else {
+                return Result::Err(
+                    error(ErrorKind::Serde, 0, "optional XML field requires Option: " + field.field),
+                )
+            };
+            if values.len() > 1 {
+                return Result::Err(
+                    error(ErrorKind::Serde, 0, "invalid serialized Option field: " + field.field),
+                )
+            }
+            return Result::Ok(values)
+        }
+        let value = lookup.get(field.field).ok_or(
+            error(ErrorKind::Serde, 0, "missing serialized field: " + field.field),
+        )?;
+        Result::Ok(Vec::from_array([value]))
     }
 
     pub fn encode[T: serde::Serialize](self: Schema, value: T, limits: Limits) -> Result[
@@ -192,60 +264,41 @@ impl Schema {
             lookup.set(name, value);
         }
         let attributes: Vec[Attribute] = Vec::new();
-        let children: Vec[(QName, string)] = Vec::new();
         for field in self.fields {
-            let value = if self.optional_fields.contains(field.field) {
-                let Some(value) = lookup.get(field.field) else {
-                    continue
-                };
-                let serde::Value::Optional(values) = value else {
-                    return Result::Err(
-                        error(
-                            ErrorKind::Serde,
-                            0,
-                            "optional XML field requires Option: " + field.field,
-                        ),
-                    )
-                };
-                if values.is_empty() {
-                    continue
+            if let FieldSource::Attribute(name) = field.source {
+                for value in self.field_values(field, lookup)? {
+                    attributes.push(Attribute { name, value: scalar_text(value, field.kind)? });
                 }
-                if values.len() != 1 {
-                    return Result::Err(
-                        error(
-                            ErrorKind::Serde,
-                            0,
-                            "invalid serialized Option field: " + field.field,
-                        ),
-                    )
-                }
-                values[0]
-            } else {
-                lookup.get(field.field).ok_or(
-                    error(ErrorKind::Serde, 0, "missing serialized field: " + field.field),
-                )?
-            };
-            let text = scalar_text(value, field.kind)?;
-            match field.source {
-                FieldSource::Attribute(name) => attributes.push(Attribute { name, value: text }),
-                FieldSource::Child(name) => children.push((name, text)),
             }
         }
-        let tokens: Vec[Token] = Vec::new();
-        tokens.push(
-            Token::Start(Element { name: self.root, attributes, namespaces: self.namespaces }),
+        let writer = Writer::new(limits)?;
+        let output: Vec[u8] = Vec::new();
+        output.extend(
+            writer.write(
+                Token::Start(Element { name: self.root, attributes, namespaces: self.namespaces }),
+            )?.to_bytes(),
         );
-        for (name, text) in children {
-            tokens.push(
-                Token::Start(Element { name, attributes: Vec::new(), namespaces: Vec::new() }),
-            );
-            if text != "" {
-                tokens.push(Token::Text(text));
+        for field in self.fields {
+            if let FieldSource::Child(name) = field.source {
+                for value in self.field_values(field, lookup)? {
+                    let text = scalar_text(value, field.kind)?;
+                    output.extend(
+                        writer.write(
+                            Token::Start(
+                                Element { name, attributes: Vec::new(), namespaces: Vec::new() },
+                            ),
+                        )?.to_bytes(),
+                    );
+                    if text != "" {
+                        output.extend(writer.write(Token::Text(text))?.to_bytes());
+                    }
+                    output.extend(writer.write(Token::End(name))?.to_bytes());
+                }
             }
-            tokens.push(Token::End(name));
         }
-        tokens.push(Token::End(self.root));
-        write_all(tokens, limits)
+        output.extend(writer.write(Token::End(self.root))?.to_bytes());
+        writer.finish()?;
+        Result::Ok(string_from_utf8(output).1)
     }
 
     pub fn decode[T: serde::Deserialize](self: Schema, input: Slice[u8], limits: Limits) -> Result[
@@ -253,9 +306,9 @@ impl Schema {
         Error,
     ] {
         let tokens = read_all(input, limits)?;
-        let values: Vec[Option[string]] = Vec::new();
+        let values: Vec[Vec[string]] = Vec::new();
         for _ in self.fields {
-            values.push(Option::None);
+            values.push(Vec::new());
         }
         let mut depth = 0;
         let mut active = -1;
@@ -274,7 +327,7 @@ impl Schema {
                             for index in 0..self.fields.len() {
                                 if let FieldSource::Attribute(name) = self.fields[index].source {
                                     if same_name(name, attribute.name) {
-                                        values[index] = Option::Some(attribute.value);
+                                        values[index].push(attribute.value);
                                         found = true;
                                     }
                                 }
@@ -299,7 +352,9 @@ impl Schema {
                                 }
                             }
                         }
-                        if active < 0 || values[active].is_some() {
+                        if active < 0
+                            || (!values[active].is_empty()
+                                && !self.repeated_fields.contains(self.fields[active].field)) {
                             return Result::Err(
                                 error(ErrorKind::Serde, 0, "unknown or repeated XML child"),
                             )
@@ -312,7 +367,7 @@ impl Schema {
                 },
                 Token::End(_) => {
                     if depth == 2 {
-                        values[active] = Option::Some(string_from_utf8(child_text.copy()).1);
+                        values[active].push(string_from_utf8(child_text).1);
                         active = -1;
                     }
                     depth -= 1;
@@ -337,17 +392,25 @@ impl Schema {
         let fields: Vec[(string, serde::Value)] = Vec::new();
         for index in 0..self.fields.len() {
             let field = self.fields[index];
-            let value = if self.optional_fields.contains(field.field) {
+            let value = if self.repeated_fields.contains(field.field) {
                 let encoded: Vec[serde::Value] = Vec::new();
-                if let Some(raw) = values[index] {
+                for raw in values[index] {
                     encoded.push(scalar_value(raw, field.kind)?);
+                }
+                serde::Value::Sequence(encoded)
+            } else if self.optional_fields.contains(field.field) {
+                let encoded: Vec[serde::Value] = Vec::new();
+                if !values[index].is_empty() {
+                    encoded.push(scalar_value(values[index][0], field.kind)?);
                 }
                 serde::Value::Optional(encoded)
             } else {
-                let raw = values[index].ok_or(
-                    error(ErrorKind::Serde, 0, "missing XML field: " + field.field),
-                )?;
-                scalar_value(raw, field.kind)?
+                if values[index].is_empty() {
+                    return Result::Err(
+                        error(ErrorKind::Serde, 0, "missing XML field: " + field.field),
+                    )
+                }
+                scalar_value(values[index][0], field.kind)?
             };
             fields.push((field.field, value));
         }

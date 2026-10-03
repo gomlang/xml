@@ -1,0 +1,49 @@
+package tests;
+
+use ecosystem::xml;
+use std::serde::{Serialize, Deserialize};
+use std::testing;
+
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+struct Numbers {
+    values: Vec[u64],
+}
+
+#[test]
+fn consumer_maps_repeated_unsigned_children_with_checked_cardinality() -> () {
+    let schema = testing::expect_ok(
+        xml::Schema::new(
+            xml::QName { prefix: "", local: "numbers", uri: "" },
+            Vec::new(),
+            Vec::from_array(
+                [
+                    xml::Field {
+                        field: "values",
+                        source: xml::FieldSource::Child(
+                            xml::QName { prefix: "", local: "n", uri: "" },
+                        ),
+                        kind: xml::ScalarKind::Unsigned,
+                    },
+                ],
+            ),
+        ),
+        "schema",
+    );
+    let schema = testing::expect_ok(
+        schema.with_repeated_fields(Vec::from_array(["values"])),
+        "sequence",
+    );
+    let value = Numbers { values: Vec::from_array([0, 18446744073709551615]) };
+    let wire = testing::expect_ok(schema.encode(value, xml::Limits::standard()), "encode");
+    testing::assert_eq(wire, "<numbers><n>0</n><n>18446744073709551615</n></numbers>");
+    let result: Numbers = testing::expect_ok(
+        schema.decode(wire.to_bytes().as_slice(), xml::Limits::standard()),
+        "decode",
+    );
+    testing::assert(result == value);
+    let result: Result[Numbers, xml::Error] = schema.decode(
+        b"<numbers><n>-1</n></numbers>".as_slice(),
+        xml::Limits::standard(),
+    );
+    testing::assert_err(result);
+}
