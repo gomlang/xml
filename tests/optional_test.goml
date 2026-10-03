@@ -1,0 +1,237 @@
+package tests;
+
+use ecosystem::xml;
+use xml::{Field, FieldSource, Namespace, QName, ScalarKind, Schema};
+use std::serde::{Serialize, Deserialize};
+use std::testing;
+
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+struct OptionalRecord {
+    id: u64,
+    title: Option[string],
+    enabled: Option[bool],
+    label: Option[string],
+}
+
+#[derive(Serialize)]
+struct OnlyId {
+    id: u64,
+}
+
+#[derive(Serialize)]
+struct ExtraField {
+    id: u64,
+    extra: string,
+}
+
+fn optional_schema() -> Schema {
+    let schema = testing::expect_ok(
+        Schema::new(
+            QName { prefix: "p", local: "entry", uri: "urn:entry" },
+            Vec::from_array([Namespace { prefix: "p", uri: "urn:entry" }]),
+            Vec::from_array(
+                [
+                    Field {
+                        field: "id",
+                        source: FieldSource::Attribute(QName { prefix: "", local: "id", uri: "" }),
+                        kind: ScalarKind::Unsigned,
+                    },
+                    Field {
+                        field: "title",
+                        source: FieldSource::Attribute(
+                            QName { prefix: "", local: "title", uri: "" },
+                        ),
+                        kind: ScalarKind::Text,
+                    },
+                    Field {
+                        field: "enabled",
+                        source: FieldSource::Child(
+                            QName { prefix: "p", local: "enabled", uri: "urn:entry" },
+                        ),
+                        kind: ScalarKind::Bool,
+                    },
+                    Field {
+                        field: "label",
+                        source: FieldSource::Child(
+                            QName { prefix: "p", local: "label", uri: "urn:entry" },
+                        ),
+                        kind: ScalarKind::Text,
+                    },
+                ],
+            ),
+        ),
+        "schema",
+    );
+    testing::expect_ok(
+        schema.with_optional_fields(Vec::from_array(["title", "enabled", "label"])),
+        "optional fields",
+    )
+}
+
+#[test]
+fn optional_fields_roundtrip_none_empty_and_present_values() -> () {
+    let schema = optional_schema();
+    for value in[
+        OptionalRecord { id: 42, title: Option::None, enabled: Option::None, label: Option::None },
+        OptionalRecord {
+            id: 42,
+            title: Option::Some(""),
+            enabled: Option::Some(false),
+            label: Option::Some(""),
+        },
+        OptionalRecord {
+            id: 42,
+            title: Option::Some("a<&🙂"),
+            enabled: Option::Some(true),
+            label: Option::Some("x<&界"),
+        },
+    ] {
+        let wire = testing::expect_ok(schema.encode(value, xml::Limits::standard()), "encode");
+        let decoded: OptionalRecord = testing::expect_ok(
+            schema.decode(wire.to_bytes().as_slice(), xml::Limits::standard()),
+            "decode",
+        );
+        testing::assert(decoded == value);
+        if value.title.is_none() {
+            testing::assert(!wire.contains("title="));
+        }
+        if value.enabled.is_none() {
+            testing::assert(!wire.contains("enabled"));
+        }
+        if value.label.is_none() {
+            testing::assert(!wire.contains("label"));
+        }
+    }
+    let absent: OptionalRecord = testing::expect_ok(
+        schema.decode(
+            b"<e:entry xmlns:e=\"urn:entry\" id=\"42\"/>".as_slice(),
+            xml::Limits::standard(),
+        ),
+        "prefix-independent missing fields",
+    );
+    testing::assert(absent.title.is_none() && absent.enabled.is_none() && absent.label.is_none());
+    let empty: OptionalRecord = testing::expect_ok(
+        schema.decode(
+            b"<entry xmlns=\"urn:entry\" id=\"42\" title=\"\"><label/></entry>".as_slice(),
+            xml::Limits::standard(),
+        ),
+        "empty values",
+    );
+    testing::assert(empty.title == Option::Some(""));
+    testing::assert(empty.label == Option::Some(""));
+}
+
+#[test]
+fn optional_fields_still_reject_invalid_present_or_unmapped_content() -> () {
+    let omitted = testing::expect_ok(
+        optional_schema().encode(OnlyId { id: 1 }, xml::Limits::standard()),
+        "serializer omits optional fields",
+    );
+    let decoded: OptionalRecord = testing::expect_ok(
+        optional_schema().decode(omitted.to_bytes().as_slice(), xml::Limits::standard()),
+        "omitted fields become None",
+    );
+    testing::assert(decoded.title.is_none() && decoded.enabled.is_none() && decoded.label.is_none());
+    testing::assert_err(
+        optional_schema().encode(ExtraField { id: 1, extra: "unknown" }, xml::Limits::standard()),
+    );
+    for input in[
+        "<entry xmlns=\"urn:entry\"/>",
+        "<entry xmlns=\"urn:entry\" id=\"1\"><enabled/></entry>",
+        "<entry xmlns=\"urn:entry\" id=\"1\"><enabled>maybe</enabled></entry>",
+        "<entry xmlns=\"urn:entry\" id=\"1\"><label/><label/></entry>",
+        "<entry xmlns=\"urn:entry\" id=\"1\" extra=\"x\"/>",
+        "<entry xmlns=\"urn:entry\" id=\"1\"><label><nested/></label></entry>",
+    ] {
+        let result: Result[OptionalRecord, xml::Error] = optional_schema().decode(
+            input.to_bytes().as_slice(),
+            xml::Limits::standard(),
+        );
+        testing::assert_err(result);
+    }
+    let value = OptionalRecord {
+        id: 1,
+        title: Option::Some("x"),
+        enabled: Option::None,
+        label: Option::None,
+    };
+    let required = testing::expect_ok(
+        optional_schema().with_optional_fields(Vec::new()),
+        "required again",
+    );
+    testing::assert_err(required.encode(value, xml::Limits::standard()));
+    let result: Result[OptionalRecord, xml::Error] = required.decode(
+        b"<entry xmlns=\"urn:entry\" id=\"1\"/>".as_slice(),
+        xml::Limits::standard(),
+    );
+    testing::assert_err(result);
+}
+
+#[test]
+fn optional_field_configuration_is_checked_and_detached() -> () {
+    let original = optional_schema();
+    testing::assert_err(original.with_optional_fields(Vec::from_array(["missing"])));
+    testing::assert_err(original.with_optional_fields(Vec::from_array(["title", "title"])));
+    let names = Vec::from_array(["title", "enabled", "label"]);
+    let schema = testing::expect_ok(original.with_optional_fields(names), "selection");
+    names[0] = "id";
+    let value = OptionalRecord {
+        id: 1,
+        title: Option::None,
+        enabled: Option::None,
+        label: Option::None,
+    };
+    testing::assert_ok(schema.encode(value, xml::Limits::standard()));
+    testing::assert_ok(original.encode(value, xml::Limits::standard()));
+    let declarations = Vec::from_array([Namespace { prefix: "p", uri: "urn:entry" }]);
+    let fields = Vec::from_array(
+        [
+            Field {
+                field: "id",
+                source: FieldSource::Attribute(QName { prefix: "", local: "id", uri: "" }),
+                kind: ScalarKind::Unsigned,
+            },
+        ],
+    );
+    let snapshot = testing::expect_ok(
+        Schema::new(QName { prefix: "p", local: "entry", uri: "urn:entry" }, declarations, fields),
+        "snapshot",
+    );
+    fields.clear();
+    declarations.clear();
+    testing::assert_ok(snapshot.with_optional_fields(Vec::from_array(["id"])));
+    let wire = testing::expect_ok(
+        snapshot.encode(OnlyId { id: 1 }, xml::Limits::standard()),
+        "detached schema",
+    );
+    testing::assert(wire.contains("xmlns:p=\"urn:entry\""));
+    testing::assert(wire.contains("id=\"1\""));
+}
+
+#[test]
+fn optional_fields_obey_output_and_input_limits() -> () {
+    let value = OptionalRecord {
+        id: 1,
+        title: Option::None,
+        enabled: Option::Some(true),
+        label: Option::Some("界"),
+    };
+    let wire = testing::expect_ok(optional_schema().encode(value, xml::Limits::standard()), "wire");
+    testing::assert_ok(
+        optional_schema().encode(
+            value,
+            xml::Limits { max_output_bytes: wire.byte_len(), ..xml::Limits::standard() },
+        ),
+    );
+    testing::assert_err(
+        optional_schema().encode(
+            value,
+            xml::Limits { max_output_bytes: wire.byte_len() - 1, ..xml::Limits::standard() },
+        ),
+    );
+    let result: Result[OptionalRecord, xml::Error] = optional_schema().decode(
+        wire.to_bytes().as_slice(),
+        xml::Limits { max_input_bytes: wire.byte_len() - 1, ..xml::Limits::standard() },
+    );
+    testing::assert_err(result);
+}

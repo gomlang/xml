@@ -40,7 +40,19 @@ fn namespaced_tokens() -> Result[Vec[xml::Token], xml::Error] {
 
 `Limits::standard()` caps total input and decoded text at 16 MiB, pending and individual tokens at 1 MiB, output at 16 MiB, depth at 128, attributes per element at 1,024, and emitted tokens at 1,000,000. All limits can be lowered. A caller must feed chunks that fit the pending limit; long unclosed text or markup fails rather than growing without bound. Syntax, namespace, entity, UTF-8, limit, state, and serde errors are recoverable `Error` values with a byte offset for parser failures.
 
-The optional `Schema` uses `std::serde::Serialize` and `Deserialize` through an explicit mapping of flat struct fields to root attributes or direct child text elements. `ScalarKind` supports text, booleans, signed integers, and unsigned integers. The mapping rejects unknown, missing, repeated, mixed, and nested fields. Namespace matching uses expanded URI/local names, independent of a document's chosen prefix. It does not infer a mapping from GoML reflection or attempt general XML-to-object conversion; optional values, repeated children, nested structs, and mixed content remain outside this schema adapter.
+The optional `Schema` uses `std::serde::Serialize` and `Deserialize` through an explicit mapping of flat struct fields to root attributes or direct child text elements. `ScalarKind` supports text, booleans, signed integers, and unsigned integers. Fields are required by default. The mapping rejects unknown, repeated, mixed and nested fields. Namespace matching uses expanded URI/local names, independent of a document's chosen prefix. Repeated children, nested structs and mixed content remain outside this schema adapter.
+
+`schema.with_optional_fields(names)` returns a schema whose selected struct
+fields map to `Option[T]`; it replaces the previous optional selection. Unknown
+or duplicate names fail. `None` omits the attribute or child, and a missing XML
+field decodes as `None`. `Some("")` remains a present empty value; present invalid
+booleans or integers still fail. Encoding requires `Option[T]` for selected
+fields; a field omitted by the serializer is also treated as absent. Other
+fields remain required. This is an explicit omission mapping and does not add
+`xsi:nil` handling. Schema construction copies namespace/field containers, and
+optional selection copies names, so later caller mutations cannot change the
+validated mapping. Existing `Schema::new` and public `Field` literals remain
+source compatible.
 
 Run `(cd ../verification && just ecosystem-test xml)` from this library repository to verify the library, example and its independent downstream verification, and cached build.
 

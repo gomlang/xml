@@ -1,0 +1,51 @@
+package tests;
+
+use ecosystem::xml;
+use xml::{Schema, QName, Field, FieldSource, ScalarKind};
+use std::serde::{Serialize, Deserialize};
+use std::testing;
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct Entry {
+    name: Option[string],
+}
+
+#[test]
+fn independent_consumer_distinguishes_absent_and_empty_optional_attribute() -> () {
+    let schema = testing::expect_ok(
+        Schema::new(
+            QName { prefix: "", local: "entry", uri: "" },
+            Vec::new(),
+            Vec::from_array(
+                [
+                    Field {
+                        field: "name",
+                        source: FieldSource::Attribute(QName { prefix: "", local: "name", uri: "" }),
+                        kind: ScalarKind::Text,
+                    },
+                ],
+            ),
+        ),
+        "schema",
+    );
+    let schema = testing::expect_ok(
+        schema.with_optional_fields(Vec::from_array(["name"])),
+        "optional",
+    );
+    for (wire, value) in[
+        ("<entry/>", Entry { name: Option::None }),
+        ("<entry name=\"\"/>", Entry { name: Option::Some("") }),
+    ] {
+        let decoded: Entry = testing::expect_ok(
+            schema.decode(wire.to_bytes().as_slice(), xml::Limits::standard()),
+            "decode",
+        );
+        testing::assert(decoded == value);
+        let encoded = testing::expect_ok(schema.encode(value, xml::Limits::standard()), "encode");
+        let decoded: Entry = testing::expect_ok(
+            schema.decode(encoded.to_bytes().as_slice(), xml::Limits::standard()),
+            "roundtrip",
+        );
+        testing::assert(decoded == value);
+    }
+}
