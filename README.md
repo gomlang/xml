@@ -47,6 +47,10 @@ fn namespaced_tokens() -> Result[Vec[xml::Token], xml::Error] {
 
 `Limits::standard()` caps total input and decoded text at 16 MiB, pending and individual tokens at 1 MiB, output at 16 MiB, depth at 128, attributes per element at 1,024, and emitted tokens at 1,000,000. All limits can be lowered. A caller must feed chunks that fit the pending limit; long unclosed text or markup fails rather than growing without bound. Syntax, namespace, entity, UTF-8, limit, state, and serde errors are recoverable `Error` values with a byte offset for parser failures.
 
+The attribute limit counts ordinary attributes and namespace declarations
+together on each element, in both the reader and writer. A writer rejects an
+over-budget start element before returning output for that token.
+
 `read_all` sizes each input chunk using the remaining pending capacity, including
 any unfinished token from the previous chunk. Documents may therefore exceed the
 pending budget when their individual tokens fit it. A full pending buffer that

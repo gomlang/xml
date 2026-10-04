@@ -1,0 +1,60 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+fn namespace_limit_element() -> xml::Element {
+    xml::Element {
+        name: xml::QName { prefix: "", local: "root", uri: "" },
+        attributes: Vec::from_array(
+            [xml::Attribute { name: xml::QName { prefix: "", local: "id", uri: "" }, value: "7" }],
+        ),
+        namespaces: Vec::from_array([xml::Namespace { prefix: "p", uri: "urn:example" }]),
+    }
+}
+
+#[test]
+fn namespace_declarations_share_the_writer_attribute_budget() -> () {
+    for ordinary_attributes in Vec::from_array([false, true]) {
+        let element = namespace_limit_element();
+        if !ordinary_attributes {
+            element.attributes.clear();
+        }
+        let limits = xml::Limits {
+            max_attributes: element.attributes.len(),
+            ..xml::Limits::standard(),
+        };
+        let writer = testing::expect_ok(xml::Writer::new(limits), "writer");
+        let problem = testing::expect_err(
+            writer.write(xml::Token::Start(element)),
+            "namespace exceeds combined attribute budget",
+        );
+        testing::assert_eq(problem.kind, xml::ErrorKind::Limit);
+        testing::assert_eq(
+            testing::expect_err(writer.write(xml::Token::End(element.name)), "failed writer").kind,
+            xml::ErrorKind::State,
+        );
+    }
+}
+
+#[test]
+fn exact_combined_attribute_budget_round_trips_through_reader_and_writer() -> () {
+    let element = namespace_limit_element();
+    let limits = xml::Limits { max_attributes: 2, ..xml::Limits::standard() };
+    let tokens = Vec::from_array([xml::Token::Start(element), xml::Token::End(element.name)]);
+    let wire = testing::expect_ok(xml::write_all(tokens, limits), "combined exact budget");
+    testing::assert_eq(wire, "<root xmlns:p=\"urn:example\" id=\"7\"></root>");
+    testing::assert(
+        testing::expect_ok(xml::read_all(wire.to_bytes().as_slice(), limits), "read exact budget")
+            == tokens,
+    );
+    let short = xml::Limits { max_attributes: 1, ..limits };
+    testing::assert_eq(
+        testing::expect_err(xml::write_all(tokens, short), "write combined limit").kind,
+        xml::ErrorKind::Limit,
+    );
+    testing::assert_eq(
+        testing::expect_err(xml::read_all(wire.to_bytes().as_slice(), short), "read combined limit").kind,
+        xml::ErrorKind::Limit,
+    );
+}
