@@ -593,11 +593,18 @@ pub fn read_all(input: Slice[u8], limits: Limits) -> Result[Vec[Token], Error] {
     let tokens: Vec[Token] = Vec::new();
     let mut cursor = 0;
     while cursor < input.len() {
+        let pending = reader.pending_bytes();
+        let available = limits.max_pending_bytes - pending;
+        if available == 0 {
+            return Result::Err(
+                error(ErrorKind::Limit, cursor - pending, "XML pending limit exceeded"),
+            )
+        }
         let remaining = input.len() - cursor;
-        let step = if remaining < limits.max_pending_bytes {
+        let step = if remaining < available {
             remaining
         } else {
-            limits.max_pending_bytes
+            available
         };
         tokens.extend(reader.feed(input.sub(cursor, cursor + step))?);
         cursor += step;

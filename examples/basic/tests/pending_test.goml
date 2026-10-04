@@ -1,0 +1,17 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+#[test]
+fn downstream_read_all_handles_tokens_crossing_pending_chunks() -> () {
+    let input = "<r><a>abc</a><b>def</b></r>".to_bytes();
+    let expected = testing::expect_ok(
+        xml::read_all(input.as_slice(), xml::Limits::standard()),
+        "reference tokens",
+    );
+    let mut limits = xml::Limits::standard();
+    limits.max_pending_bytes = 8;
+    let actual = testing::expect_ok(xml::read_all(input.as_slice(), limits), "bounded tokens");
+    testing::assert(actual == expected);
+}

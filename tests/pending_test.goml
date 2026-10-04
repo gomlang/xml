@@ -1,0 +1,37 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+#[test]
+fn read_all_uses_remaining_pending_capacity_across_token_boundaries() -> () {
+    let input = "<r><x a=\"é\">one&amp;two</x><!--note--><y/></r>".to_bytes();
+    let expected = testing::expect_ok(
+        xml::read_all(input.as_slice(), xml::Limits::standard()),
+        "reference tokens",
+    );
+    for capacity in 12..input.len() {
+        let mut limits = xml::Limits::standard();
+        limits.max_pending_bytes = capacity;
+        let actual = testing::expect_ok(
+            xml::read_all(input.as_slice(), limits),
+            f"pending capacity {capacity}",
+        );
+        testing::assert(actual == expected);
+    }
+}
+
+#[test]
+fn read_all_full_pending_buffer_returns_limit_without_losing_eof() -> () {
+    let mut limits = xml::Limits::standard();
+    limits.max_pending_bytes = 4;
+    testing::assert_ok(xml::read_all("<r/>".to_bytes().as_slice(), limits));
+    testing::assert_ok(xml::read_all("<r/>    ".to_bytes().as_slice(), limits));
+    for input in Vec::from_array(["<root/>", "<r>abcde</r>", "<r/>     "]) {
+        let problem = testing::expect_err(
+            xml::read_all(input.to_bytes().as_slice(), limits),
+            "full pending buffer",
+        );
+        testing::assert_eq(problem.kind, xml::ErrorKind::Limit);
+    }
+}

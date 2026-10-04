@@ -40,6 +40,12 @@ fn namespaced_tokens() -> Result[Vec[xml::Token], xml::Error] {
 
 `Limits::standard()` caps total input and decoded text at 16 MiB, pending and individual tokens at 1 MiB, output at 16 MiB, depth at 128, attributes per element at 1,024, and emitted tokens at 1,000,000. All limits can be lowered. A caller must feed chunks that fit the pending limit; long unclosed text or markup fails rather than growing without bound. Syntax, namespace, entity, UTF-8, limit, state, and serde errors are recoverable `Error` values with a byte offset for parser failures.
 
+`read_all` sizes each input chunk using the remaining pending capacity, including
+any unfinished token from the previous chunk. Documents may therefore exceed the
+pending budget when their individual tokens fit it. A full pending buffer that
+still needs input returns `Limit`; text tokens also need room for the following
+`<` delimiter unless they end at EOF.
+
 The optional `Schema` uses `std::serde::Serialize` and `Deserialize` through an explicit mapping of flat struct fields to root attributes or direct child text elements. `ScalarKind` supports text, booleans, signed integers, and unsigned integers. Fields are required by default. The mapping rejects unknown, unmapped repeated, mixed and nested fields. Namespace matching uses expanded URI/local names, independent of a document's chosen prefix. Nested structs and mixed content remain outside this schema adapter.
 
 `schema.with_optional_fields(names)` returns a schema whose selected struct
