@@ -69,16 +69,20 @@ fn write_token(token: Token, state: WriterState, limits: Limits) -> Result[
                 }
             }
             check_qname(element.name, false, element.namespaces, state.scopes, state.output)?;
-            let mut output = "<" + rendered_name(element.name);
+            // Append fields without recopying the entire start tag each time.
+            let output = ("<" + rendered_name(element.name)).to_bytes();
             for declaration in element.namespaces {
                 let key = if declaration.prefix == "" {
                     "xmlns"
                 } else {
                     "xmlns:" + declaration.prefix
                 };
-                output += " " + key + "=\""
+                let field = (" " + key + "=\""
                     + escape_attribute(declaration.uri, limits.max_token_bytes)?
-                    + "\"";
+                    + "\"").to_bytes();
+                // Reserve the final '>' too, avoiding a last growth for one field.
+                output.reserve(field.len() + 1);
+                output.extend(field);
             }
             for index in 0..element.attributes.len() {
                 let attribute = element.attributes[index];
@@ -95,15 +99,17 @@ fn write_token(token: Token, state: WriterState, limits: Limits) -> Result[
                         )
                     }
                 }
-                output += " " + rendered_name(attribute.name) + "=\""
+                let field = (" " + rendered_name(attribute.name) + "=\""
                     + escape_attribute(attribute.value, limits.max_token_bytes)?
-                    + "\"";
+                    + "\"").to_bytes();
+                output.reserve(field.len() + 1);
+                output.extend(field);
             }
-            output += ">";
+            output.push(62);
             state.open.push(element.name);
             state.scopes.push(element.namespaces.copy());
             state.root_seen = true;
-            output
+            string_from_utf8(output).1
         },
         Token::End(name) => {
             if state.open.len() == 0 || state.open[state.open.len() - 1] != name {
