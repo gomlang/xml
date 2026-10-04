@@ -1,0 +1,85 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+fn instruction_tokens(source: string, width: isize) -> Result[Vec[xml::Token], xml::Error] {
+    let reader = xml::Reader::new(xml::Limits::standard())?;
+    let input = source.to_bytes();
+    let output = Vec::new();
+    let mut cursor = 0;
+    while cursor < input.len() {
+        let end = if width < input.len() - cursor {
+            cursor + width
+        } else {
+            input.len()
+        };
+        output.extend(reader.feed(input.slice(cursor, end))?);
+        cursor = end;
+    }
+    output.extend(reader.finish()?);
+    Result::Ok(output)
+}
+
+#[test]
+fn processing_instructions_preserve_content_after_xml_separator_whitespace() -> () {
+    // XML Infoset 2.4 excludes only the target and immediately following XML S.
+    // These expected payloads also agree with Expat's ProcessingInstructionHandler.
+    for (instruction, expected) in Vec::from_array(
+        [
+            ("<?task value   ?>", "value   "),
+            ("<?task \u00a0value\u00a0?>", "\u00a0value\u00a0"),
+            ("<?task\t\tvalue\t?>", "value\t"),
+            ("<?task \r\nvalue\r\n?>", "value\n"),
+            ("<?task \u2003 ?>", "\u2003 "),
+            ("<?task a&amp;b ?>", "a&amp;b "),
+            ("<?task?>", ""),
+            ("<?task \t\r\n?>", ""),
+        ],
+    ) {
+        let source = instruction + "<r/>";
+        for width in 1..source.byte_len() + 1 {
+            let tokens = testing::expect_ok(instruction_tokens(source, width), "read instruction");
+            match tokens[0] {
+                xml::Token::Instruction(target, value) => {
+                    testing::assert_eq(target, "task");
+                    testing::assert_eq(value, expected);
+                },
+                _ => testing::fail("expected instruction token"),
+            }
+            let written = testing::expect_ok(
+                xml::write_all(tokens, xml::Limits::standard()),
+                "write instruction",
+            );
+            testing::assert(
+                testing::expect_ok(instruction_tokens(written, width), "reread instruction")
+                    == tokens,
+            );
+        }
+    }
+}
+
+#[test]
+fn processing_instructions_do_not_trim_invalid_xml_characters() -> () {
+    for content in Vec::from_array(["\u000bvalue", "value\u000b", "\u000c", "\u0000"]) {
+        let source = "<?task " + content + "?><r/>";
+        for width in Vec::from_array([1, source.byte_len()]) {
+            let problem = testing::expect_err(
+                instruction_tokens(source, width),
+                "invalid instruction character",
+            );
+            testing::assert_eq(problem.kind, xml::ErrorKind::Syntax);
+        }
+    }
+}
+
+#[test]
+fn processing_instruction_content_whitespace_counts_toward_decoded_limit() -> () {
+    let source = "<?task x  ?><r/>".to_bytes();
+    let mut limits = xml::Limits::standard();
+    limits.max_decoded_bytes = 3;
+    testing::assert_ok(xml::read_all(source.as_slice(), limits));
+    limits.max_decoded_bytes = 2;
+    let problem = testing::expect_err(xml::read_all(source.as_slice(), limits), "decoded limit");
+    testing::assert_eq(problem.kind, xml::ErrorKind::Limit);
+}

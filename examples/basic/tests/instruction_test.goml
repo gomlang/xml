@@ -1,0 +1,18 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+#[test]
+fn downstream_instruction_keeps_unicode_and_trailing_whitespace() -> () {
+    let tokens = testing::expect_ok(
+        xml::read_all("<?task \u00a0value \t?><r/>".to_bytes().as_slice(), xml::Limits::standard()),
+        "instruction content",
+    );
+    match tokens[0] {
+        xml::Token::Instruction(_, value) => testing::assert_eq(value, "\u00a0value \t"),
+        _ => testing::fail("expected instruction"),
+    }
+    let written = testing::expect_ok(xml::write_all(tokens, xml::Limits::standard()), "write");
+    testing::assert_eq(written, "<?task \u00a0value \t?><r></r>");
+}

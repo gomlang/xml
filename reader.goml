@@ -203,7 +203,11 @@ fn next_raw(data: Vec[u8], at: isize, offset: isize, limits: Limits, final_input
                 }
                 body.byte_slice(start, end)
             } else {
-                body.byte_slice(split, body.byte_len()).trim()
+                let mut start = split;
+                while start < body.byte_len() && space(body.byte_get(start)) {
+                    start += 1;
+                }
+                body.byte_slice(start, body.byte_len())
             };
             return Result::Ok(Option::Some((RawToken::Instruction(target, payload), end + 2 - at)))
         }
