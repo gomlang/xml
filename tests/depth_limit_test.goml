@@ -1,0 +1,67 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+fn depth_element(local: string) -> xml::Element {
+    xml::Element {
+        name: xml::QName { prefix: "", local, uri: "" },
+        attributes: Vec::new(),
+        namespaces: Vec::new(),
+    }
+}
+
+#[test]
+fn writer_depth_exhaustion_is_a_limit_error_at_the_next_output_byte() -> () {
+    let root = depth_element("r");
+    for maximum in Vec::from_array([0, 1, 2]) {
+        let limits = xml::Limits { max_depth: maximum, ..xml::Limits::standard() };
+        let writer = testing::expect_ok(xml::Writer::new(limits), "writer");
+        let mut prefix = "";
+        for _ in 0..maximum {
+            prefix += testing::expect_ok(writer.write(xml::Token::Start(root)), "permitted depth");
+        }
+        let problem = testing::expect_err(writer.write(xml::Token::Start(root)), "depth exhausted");
+        testing::assert_eq(problem.kind, xml::ErrorKind::Limit);
+        testing::assert_eq(problem.offset, prefix.byte_len());
+        let input = (prefix + "<r/>").to_bytes();
+        testing::assert_eq(
+            testing::expect_err(xml::read_all(input.as_slice(), limits), "reader depth exhausted").kind,
+            xml::ErrorKind::Limit,
+        );
+        testing::assert_eq(
+            testing::expect_err(
+                writer.write(xml::Token::End(root.name)),
+                "failed writer remains closed",
+            ).kind,
+            xml::ErrorKind::State,
+        );
+    }
+}
+
+#[test]
+fn exact_writer_depth_round_trips_and_multiple_roots_remain_state_errors() -> () {
+    let root = depth_element("r");
+    let child = depth_element("c");
+    let limits = xml::Limits { max_depth: 2, ..xml::Limits::standard() };
+    let tokens = Vec::from_array(
+        [
+            xml::Token::Start(root),
+            xml::Token::Start(child),
+            xml::Token::End(child.name),
+            xml::Token::End(root.name),
+        ],
+    );
+    let wire = testing::expect_ok(xml::write_all(tokens, limits), "exact depth");
+    testing::assert(
+        testing::expect_ok(xml::read_all(wire.to_bytes().as_slice(), limits), "read exact depth")
+            == tokens,
+    );
+    let writer = testing::expect_ok(xml::Writer::new(limits), "writer");
+    testing::assert_ok(writer.write(xml::Token::Start(root)));
+    testing::assert_ok(writer.write(xml::Token::End(root.name)));
+    testing::assert_eq(
+        testing::expect_err(writer.write(xml::Token::Start(child)), "second root").kind,
+        xml::ErrorKind::State,
+    );
+}

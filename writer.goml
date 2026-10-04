@@ -38,9 +38,14 @@ fn write_token(token: Token, state: WriterState, limits: Limits) -> Result[
     }
     let result = match token {
         Token::Start(element) => {
-            if state.root_done || state.open.len() >= limits.max_depth {
+            if state.root_done {
                 return Result::Err(
-                    error(ErrorKind::State, state.output, "invalid XML element depth"),
+                    error(ErrorKind::State, state.output, "multiple XML root elements"),
+                )
+            }
+            if state.open.len() >= limits.max_depth {
+                return Result::Err(
+                    error(ErrorKind::Limit, state.output, "XML depth limit exceeded"),
                 )
             }
             if element.attributes.len() > limits.max_attributes

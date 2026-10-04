@@ -63,6 +63,10 @@ The attribute limit counts ordinary attributes and namespace declarations
 together on each element, in both the reader and writer. A writer rejects an
 over-budget start element before returning output for that token.
 
+Exceeding `max_depth` returns `ErrorKind::Limit` in both the reader and writer.
+Writing a second root remains a `State` error. After either write failure, the
+writer is closed and subsequent calls return `State`.
+
 `read_all` sizes each input chunk using the remaining pending capacity, including
 any unfinished token from the previous chunk. Documents may therefore exceed the
 pending budget when their individual tokens fit it. A full pending buffer that

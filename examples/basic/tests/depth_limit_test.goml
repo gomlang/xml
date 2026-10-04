@@ -1,0 +1,24 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+#[test]
+fn consumer_can_distinguish_xml_depth_limits_from_writer_state_errors() -> () {
+    let element = xml::Element {
+        name: xml::QName { prefix: "", local: "root", uri: "" },
+        attributes: Vec::new(),
+        namespaces: Vec::new(),
+    };
+    let limits = xml::Limits { max_depth: 0, ..xml::Limits::standard() };
+    testing::assert_eq(
+        testing::expect_err(
+            xml::write_all(
+                Vec::from_array([xml::Token::Start(element), xml::Token::End(element.name)]),
+                limits,
+            ),
+            "depth limit",
+        ).kind,
+        xml::ErrorKind::Limit,
+    );
+}
