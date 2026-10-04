@@ -133,8 +133,16 @@ fn check_qname(
     scopes: Vec[Vec[Namespace]],
     offset: isize,
 ) -> Result[(), Error] {
-    let parsed = qualified(rendered_name(value), attribute, current, scopes, offset)?;
-    if parsed.uri != value.uri {
+    if !ncname(value.local) || (value.prefix != "" && !ncname(value.prefix)) {
+        return Result::Err(error(ErrorKind::Syntax, offset, "invalid qualified XML name component"))
+    }
+    if attribute && value.prefix == "" && value.local == "xmlns" {
+        return Result::Err(
+            error(ErrorKind::Namespace, offset, "xmlns must be a namespace declaration"),
+        )
+    }
+    let uri = resolve(value.prefix, attribute, current, scopes, offset)?;
+    if uri != value.uri {
         Result::Err(
             error(ErrorKind::Namespace, offset, "qualified name URI disagrees with binding"),
         )

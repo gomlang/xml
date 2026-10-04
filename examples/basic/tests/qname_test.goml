@@ -1,0 +1,21 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+#[test]
+fn consumer_schema_rejects_namespace_changing_attribute_names() -> () {
+    let root = xml::QName { prefix: "", local: "root", uri: "" };
+    let field = xml::Field {
+        field: "value",
+        source: xml::FieldSource::Attribute(xml::QName { prefix: "", local: "xmlns", uri: "" }),
+        kind: xml::ScalarKind::Text,
+    };
+    testing::assert_eq(
+        testing::expect_err(
+            xml::Schema::new(root, Vec::new(), Vec::from_array([field])),
+            "ordinary xmlns attribute",
+        ).kind,
+        xml::ErrorKind::Namespace,
+    );
+}

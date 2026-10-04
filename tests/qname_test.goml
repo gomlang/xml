@@ -1,0 +1,122 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+#[test]
+fn writer_and_schema_reject_prefixes_hidden_in_qname_local_parts() -> () {
+    let namespaces = Vec::from_array([xml::Namespace { prefix: "p", uri: "urn:example" }]);
+    let root = xml::QName { prefix: "", local: "root", uri: "" };
+    let hidden = xml::QName { prefix: "", local: "p:root", uri: "urn:example" };
+    let writer = testing::expect_ok(xml::Writer::new(xml::Limits::standard()), "writer");
+    testing::assert_eq(
+        testing::expect_err(
+            writer.write(
+                xml::Token::Start(xml::Element { name: hidden, attributes: Vec::new(), namespaces }),
+            ),
+            "hidden root prefix",
+        ).kind,
+        xml::ErrorKind::Syntax,
+    );
+    testing::assert_err(xml::Schema::new(hidden, namespaces, Vec::new()));
+    let writer = testing::expect_ok(xml::Writer::new(xml::Limits::standard()), "writer");
+    testing::assert_eq(
+        testing::expect_err(
+            writer.write(
+                xml::Token::Start(
+                    xml::Element {
+                        name: root,
+                        attributes: Vec::from_array([xml::Attribute { name: hidden, value: "x" }]),
+                        namespaces,
+                    },
+                ),
+            ),
+            "hidden attribute prefix",
+        ).kind,
+        xml::ErrorKind::Syntax,
+    );
+    for source in Vec::from_array(
+        [xml::FieldSource::Attribute(hidden), xml::FieldSource::Child(hidden)],
+    ) {
+        testing::assert_err(
+            xml::Schema::new(
+                root,
+                namespaces,
+                Vec::from_array(
+                    [xml::Field { field: "value", source, kind: xml::ScalarKind::Text }],
+                ),
+            ),
+        );
+    }
+}
+
+#[test]
+fn ordinary_xmlns_attributes_cannot_change_namespace_bindings() -> () {
+    let root = xml::QName { prefix: "", local: "root", uri: "" };
+    let xmlns = xml::QName { prefix: "", local: "xmlns", uri: "" };
+    let writer = testing::expect_ok(xml::Writer::new(xml::Limits::standard()), "writer");
+    testing::assert_eq(
+        testing::expect_err(
+            writer.write(
+                xml::Token::Start(
+                    xml::Element {
+                        name: root,
+                        attributes: Vec::from_array(
+                            [xml::Attribute { name: xmlns, value: "urn:unexpected" }],
+                        ),
+                        namespaces: Vec::new(),
+                    },
+                ),
+            ),
+            "namespace declaration in ordinary attributes",
+        ).kind,
+        xml::ErrorKind::Namespace,
+    );
+    testing::assert_eq(
+        testing::expect_err(
+            xml::Schema::new(
+                root,
+                Vec::new(),
+                Vec::from_array(
+                    [
+                        xml::Field {
+                            field: "value",
+                            source: xml::FieldSource::Attribute(xmlns),
+                            kind: xml::ScalarKind::Text,
+                        },
+                    ],
+                ),
+            ),
+            "namespace declaration in schema attributes",
+        ).kind,
+        xml::ErrorKind::Namespace,
+    );
+}
+
+#[test]
+fn valid_namespace_components_and_xmlns_local_names_still_round_trip() -> () {
+    for source in Vec::from_array(
+        [
+            "<p:root xmlns:p='urn:example' p:id='x'/>",
+            "<xmlns/>",
+            "<root xmlns:p='urn:example' p:xmlns='x'/>",
+            "<root xmlns='urn:example' xml:lang='en'/>",
+        ],
+    ) {
+        let tokens = testing::expect_ok(
+            xml::read_all(source.to_bytes().as_slice(), xml::Limits::standard()),
+            "read namespaced document",
+        );
+        let wire = testing::expect_ok(
+            xml::write_all(tokens, xml::Limits::standard()),
+            "write names",
+        );
+        testing::assert(
+            testing::expect_ok(
+                xml::read_all(wire.to_bytes().as_slice(), xml::Limits::standard()),
+                "reread namespaced document",
+            )
+                == tokens,
+        );
+    }
+}
