@@ -16,8 +16,14 @@ enum RawToken {
     Instruction(string, string),
 }
 
+struct RawScan {
+    cursor: isize,
+    quote: u8,
+}
+
 struct ReaderState {
     pending: Vec[u8],
+    scan: Ref[RawScan],
     offset: isize,
     received: isize,
     declaration_offset: isize,
@@ -39,6 +45,7 @@ pub struct Reader {
 fn initial_reader_state() -> ReaderState {
     ReaderState {
         pending: Vec::new(),
+        scan: Ref::new(RawScan { cursor: 0, quote: 0 }),
         offset: 0,
         received: 0,
         declaration_offset: 0,
@@ -75,19 +82,32 @@ fn begins(data: Vec[u8], at: isize, pattern: string) -> bool {
     true
 }
 
-fn find_pattern(data: Vec[u8], start: isize, pattern: string) -> Option[isize] {
-    let mut at = start;
+fn find_pattern(data: Vec[u8], token: isize, start: isize, pattern: string, scan: Ref[RawScan]) -> Option[
+    isize,
+] {
+    let mut at = token + scan.get().cursor;
+    if at < start {
+        at = start;
+    }
     while at + pattern.byte_len() <= data.len() {
         if begins(data, at, pattern) {
             return Option::Some(at)
         }
         at += 1;
     }
+    scan.set(RawScan { cursor: at - token, quote: 0 });
     Option::None
 }
 
-fn tag_end(data: Vec[u8], start: isize) -> Option[isize] {
-    let mut quote: u8 = 0;
+fn tag_end(data: Vec[u8], token: isize, scan: Ref[RawScan]) -> Option[isize] {
+    let saved = scan.get();
+    let mut quote = saved.quote;
+    let start = token
+        + if saved.cursor > 0 {
+            saved.cursor
+        } else {
+            1
+        };
     for at in start..data.len() {
         let value = data[at];
         if quote == 0 {
@@ -100,18 +120,23 @@ fn tag_end(data: Vec[u8], start: isize) -> Option[isize] {
             quote = 0;
         }
     }
+    scan.set(RawScan { cursor: data.len() - token, quote });
     Option::None
 }
 
-fn next_raw(data: Vec[u8], at: isize, offset: isize, limits: Limits, final_input: bool) -> Result[
-    Option[(RawToken, isize)],
-    Error,
-] {
+fn next_raw(
+    data: Vec[u8],
+    at: isize,
+    offset: isize,
+    limits: Limits,
+    final_input: bool,
+    scan: Ref[RawScan],
+) -> Result[Option[(RawToken, isize)], Error] {
     if at == data.len() {
         return Result::Ok(Option::None)
     }
     if data[at] != 60 {
-        let mut end = at;
+        let mut end = at + scan.get().cursor;
         while end < data.len() && data[end] != 60 {
             end += 1;
         }
@@ -121,6 +146,7 @@ fn next_raw(data: Vec[u8], at: isize, offset: isize, limits: Limits, final_input
                     error(ErrorKind::Limit, offset + at, "XML text token exceeds limit"),
                 )
             }
+            scan.set(RawScan { cursor: end - at, quote: 0 });
             return Result::Ok(Option::None)
         }
         if end - at > limits.max_token_bytes {
@@ -138,7 +164,7 @@ fn next_raw(data: Vec[u8], at: isize, offset: isize, limits: Limits, final_input
             return Result::Ok(Option::None)
         }
         if begins(data, at, "<!--") {
-            let end = find_pattern(data, at + 4, "-->");
+            let end = find_pattern(data, at, at + 4, "-->", scan);
             if let Some(end) = end {
                 if end + 3 - at > limits.max_token_bytes {
                     return Result::Err(
@@ -152,7 +178,7 @@ fn next_raw(data: Vec[u8], at: isize, offset: isize, limits: Limits, final_input
                 )
             }
         } else if begins(data, at, "<![CDATA[") {
-            let end = find_pattern(data, at + 9, "]]>");
+            let end = find_pattern(data, at, at + 9, "]]>", scan);
             if let Some(end) = end {
                 if end + 3 - at > limits.max_token_bytes {
                     return Result::Err(
@@ -180,7 +206,7 @@ fn next_raw(data: Vec[u8], at: isize, offset: isize, limits: Limits, final_input
         return Result::Ok(Option::None)
     }
     if data[at + 1] == 63 {
-        if let Some(end) = find_pattern(data, at + 2, "?>") {
+        if let Some(end) = find_pattern(data, at, at + 2, "?>", scan) {
             if end + 2 - at > limits.max_token_bytes {
                 return Result::Err(
                     error(ErrorKind::Limit, offset + at, "XML instruction exceeds limit"),
@@ -218,7 +244,7 @@ fn next_raw(data: Vec[u8], at: isize, offset: isize, limits: Limits, final_input
         }
         return Result::Ok(Option::None)
     }
-    if let Some(end) = tag_end(data, at + 1) {
+    if let Some(end) = tag_end(data, at, scan) {
         if end + 1 - at > limits.max_token_bytes {
             return Result::Err(error(ErrorKind::Limit, offset + at, "XML tag exceeds limit"))
         }
@@ -548,7 +574,14 @@ impl Reader {
             }
         }
         while cursor < state.pending.len() {
-            let next = next_raw(state.pending, cursor, state.offset, self.limits, final_input);
+            let next = next_raw(
+                state.pending,
+                cursor,
+                state.offset,
+                self.limits,
+                final_input,
+                state.scan,
+            );
             match next {
                 Result::Err(problem) => {
                     state.failed = true;
@@ -557,6 +590,7 @@ impl Reader {
                 },
                 Result::Ok(Option::None) => break,
                 Result::Ok(Option::Some((raw, consumed))) => {
+                    state.scan.set(RawScan { cursor: 0, quote: 0 });
                     match apply_raw(raw, state, self.limits, state.offset + cursor) {
                         Result::Err(problem) => {
                             state.failed = true;
@@ -572,7 +606,9 @@ impl Reader {
                 },
             }
         }
-        state.pending = state.pending.slice(cursor, state.pending.len()).to_vec();
+        if cursor > 0 {
+            state.pending = state.pending.slice(cursor, state.pending.len()).to_vec();
+        }
         state.offset += cursor;
         self.state.set(state);
         Result::Ok(output)

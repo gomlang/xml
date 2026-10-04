@@ -1,0 +1,29 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+#[test]
+fn consumer_can_split_all_xml_token_families_at_any_byte() -> () {
+    let input = "\uFEFF<?xml version='1.0'?><r a='>\"'>é<!--x--><![CDATA[a]]b]]><?p x?><c/>text</r>".to_bytes();
+    let limits = xml::Limits::standard();
+    let expected = testing::expect_ok(xml::read_all(input.as_slice(), limits), "complete input");
+    for split in 0..input.len() + 1 {
+        let reader = testing::expect_ok(xml::Reader::new(limits), "reader");
+        let tokens = testing::expect_ok(
+            reader.feed(input.as_slice().sub(0, split)),
+            "first fragment",
+        );
+        testing::assert(
+            testing::expect_ok(reader.feed(b"".as_slice()), "empty fragment").is_empty(),
+        );
+        tokens.extend(
+            testing::expect_ok(
+                reader.feed(input.as_slice().sub(split, input.len())),
+                "second fragment",
+            ),
+        );
+        tokens.extend(testing::expect_ok(reader.finish(), "finish"));
+        testing::assert(tokens == expected);
+    }
+}

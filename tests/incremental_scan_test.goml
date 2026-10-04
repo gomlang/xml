@@ -1,0 +1,133 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+fn scan_chunks(input: Slice[u8], chunk: isize, limits: xml::Limits) -> Result[
+    Vec[xml::Token],
+    xml::Error,
+] {
+    let reader = xml::Reader::new(limits)?;
+    let output = Vec::new();
+    let mut offset = 0;
+    while offset < input.len() {
+        let end = if input.len() - offset < chunk {
+            input.len()
+        } else {
+            offset + chunk
+        };
+        output.extend(reader.feed(input.sub(offset, end))?);
+        output.extend(reader.feed(b"".as_slice())?);
+        offset = end;
+    }
+    output.extend(reader.finish()?);
+    Result::Ok(output)
+}
+
+fn same_scan_result(
+    actual: Result[Vec[xml::Token], xml::Error],
+    expected: Result[Vec[xml::Token], xml::Error],
+) -> () {
+    match (actual, expected) {
+        (Result::Ok(actual), Result::Ok(expected)) => testing::assert(actual == expected),
+        (Result::Err(actual), Result::Err(expected)) => {
+            testing::assert_eq(actual.kind, expected.kind);
+            testing::assert_eq(actual.offset, expected.offset);
+        },
+        _ => testing::fail("chunking changed the parse outcome"),
+    }
+}
+
+#[test]
+fn every_token_prefix_and_terminator_split_retains_values_errors_and_offsets() -> () {
+    let cases = Vec::from_array(
+        [
+            "<r/>",
+            "\uFEFF<?xml version='1.0'?><r a='>\"&amp;' b=\"'>\">é&amp;\r\nx<!-- comment --><![CDATA[]]>tail<?p ? x??>z</r><!--end-->",
+            "<r><!--x--><![CDATA[a]]b]]><?p x?>text<c a='>'>v</c></r>",
+            "<r xmlns:p='urn:p'><p:c p:a='中'>é</p:c><z/></r>",
+            "<r><!--bad--comment--></r>",
+            "<r><![CDATA[x]]>bad]]>text</r>",
+            "<![CDATA[outside]]><r/>",
+            "<?bad:target x?><r/>",
+            "<r><?xml version='1.0'?></r>",
+            "<!DOCTYPE r><r/>",
+            "<![DOCTYPEx]><r/>",
+            "<r a='unterminated>tail",
+            "<r a=\"value\"b='missing space'></r>",
+            "<r></wrong>",
+            "<r a='&missing;'>x</r>",
+            "<r>\u0001</r>",
+        ],
+    );
+    for source in cases {
+        let bytes = source.to_bytes();
+        for end in 0..bytes.len() + 1 {
+            let input = bytes.as_slice().sub(0, end);
+            for limits in Vec::from_array(
+                [
+                    xml::Limits::standard(),
+                    xml::Limits { max_token_bytes: 7, ..xml::Limits::standard() },
+                    xml::Limits { max_token_bytes: 13, ..xml::Limits::standard() },
+                    xml::Limits { max_depth: 1, ..xml::Limits::standard() },
+                    xml::Limits { max_decoded_bytes: 4, ..xml::Limits::standard() },
+                    xml::Limits { max_tokens: 2, ..xml::Limits::standard() },
+                ],
+            ) {
+                let expected = xml::read_all(input, limits);
+                for chunk in Vec::from_array([1, 2, 3, 7, 16, 128]) {
+                    same_scan_result(scan_chunks(input, chunk, limits), expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn completed_tokens_stay_visible_while_scans_resume_and_reset() -> () {
+    let reader = testing::expect_ok(xml::Reader::new(xml::Limits::standard()), "reader");
+    let first = testing::expect_ok(reader.feed(b"<r><!--a-".as_slice()), "root and partial comment");
+    testing::assert_eq(first.len(), 1);
+    testing::assert_eq(reader.pending_bytes(), 6);
+    testing::assert(testing::expect_ok(reader.feed(b"".as_slice()), "empty feed").is_empty());
+    let second = testing::expect_ok(
+        reader.feed(b"-><![CDATA[b]]".as_slice()),
+        "comment and partial CDATA",
+    );
+    testing::assert(second == Vec::from_array([xml::Token::Comment("a")]));
+    let third = testing::expect_ok(
+        reader.feed(b"><?p c?".as_slice()),
+        "CDATA and partial instruction",
+    );
+    testing::assert(third == Vec::from_array([xml::Token::CData("b")]));
+    let fourth = testing::expect_ok(
+        reader.feed(b"><c a='>".as_slice()),
+        "instruction and quoted tag",
+    );
+    testing::assert(fourth == Vec::from_array([xml::Token::Instruction("p", "c")]));
+    testing::assert(
+        testing::expect_ok(
+            reader.feed(b"\"'/>text</r".as_slice()),
+            "complete quoted tag and partial end",
+        ).len()
+            == 3,
+    );
+    testing::assert_eq(testing::expect_ok(reader.feed(b">".as_slice()), "root end").len(), 1);
+    testing::assert(testing::expect_ok(reader.finish(), "finish").is_empty());
+}
+
+#[test]
+fn fragmented_large_comment_preserves_its_complete_payload() -> () {
+    let reader = testing::expect_ok(xml::Reader::new(xml::Limits::standard()), "reader");
+    testing::assert_ok(reader.feed(b"<r><!--".as_slice()));
+    for _ in 0..32768 {
+        testing::assert_ok(reader.feed(b"x".as_slice()));
+    }
+    let completed = testing::expect_ok(reader.feed(b"--></r>".as_slice()), "complete comment");
+    testing::assert_eq(completed.len(), 2);
+    match completed[0] {
+        xml::Token::Comment(value) => testing::assert_eq(value.byte_len(), 32768),
+        _ => testing::fail("expected comment"),
+    }
+    testing::assert_ok(reader.finish());
+}

@@ -73,6 +73,12 @@ pending budget when their individual tokens fit it. A full pending buffer that
 still needs input returns `Limit`; text tokens also need room for the following
 `<` delimiter unless they end at EOF.
 
+The reader retains the scan position and attribute-quote state of an unfinished
+token between feeds. Splitting text, comments, CDATA, instructions or tags into
+small chunks does not repeatedly scan or copy the buffered prefix. Terminators
+can cross chunk boundaries, and completing a token resets this scan state before
+the next token.
+
 The optional `Schema` uses `std::serde::Serialize` and `Deserialize` through an explicit mapping of flat struct fields to root attributes or direct child text elements. `ScalarKind` supports text, booleans, signed integers, and unsigned integers. Fields are required by default. The mapping rejects unknown, unmapped repeated, mixed and nested fields. Namespace matching uses expanded URI/local names, independent of a document's chosen prefix. Nested structs and mixed content remain outside this schema adapter.
 
 `schema.with_optional_fields(names)` returns a schema whose selected struct
