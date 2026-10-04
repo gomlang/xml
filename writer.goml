@@ -96,7 +96,7 @@ fn write_token(token: Token, state: WriterState, limits: Limits) -> Result[
             }
             output += ">";
             state.open.push(element.name);
-            state.scopes.push(element.namespaces);
+            state.scopes.push(element.namespaces.copy());
             state.root_seen = true;
             output
         },

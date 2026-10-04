@@ -10,6 +10,10 @@ declarations belong in `Element.namespaces` or the schema's namespace list;
 an ordinary attribute named `xmlns` is rejected because it would change namespace
 bindings without updating the token model.
 
+Reader and writer namespace scopes own copies of each start element's declaration
+list. Modifying a returned token or a caller-supplied list after a write does not
+change the bindings used for later elements.
+
 Text and attributes decode the five predefined entities and decimal/hexadecimal character references. The writer escapes XML-significant characters and preserves attribute whitespace through numeric references. Literal input CR and CRLF are normalized to LF; literal attribute tab/newline/CR become spaces. Comments and CDATA remain separate tokens. Empty comments are accepted,
 including at document end and across input chunks. Outside the root, only literal
 XML whitespace (space, tab, CR, LF), comments, and processing instructions are

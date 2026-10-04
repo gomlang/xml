@@ -412,7 +412,7 @@ fn apply_raw(raw: RawToken, state: ReaderState, limits: Limits, offset: isize) -
             }
             state.root_seen = true;
             state.open.push(element.name);
-            state.scopes.push(element.namespaces);
+            state.scopes.push(element.namespaces.copy());
             tokens.push(Token::Start(element));
             if empty {
                 tokens.push(Token::End(state.open.pop().unwrap_or(element.name)));

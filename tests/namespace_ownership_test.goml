@@ -1,0 +1,76 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+fn ownership_start(tokens: Vec[xml::Token]) -> xml::Element {
+    testing::expect_some(
+        match tokens[0] {
+            xml::Token::Start(element) => Option::Some(element),
+            _ => Option::None,
+        },
+        "expected start element",
+    )
+}
+
+fn ownership_element(local: string, prefix: string, uri: string, namespaces: Vec[xml::Namespace]) -> xml::Element {
+    xml::Element { name: xml::QName { prefix, local, uri }, attributes: Vec::new(), namespaces }
+}
+
+#[test]
+fn returned_namespace_vectors_cannot_rebind_active_reader_scopes() -> () {
+    let reader = testing::expect_ok(xml::Reader::new(xml::Limits::standard()), "reader");
+    let root = ownership_start(
+        testing::expect_ok(
+            reader.feed("<r xmlns:p=\"urn:original\">".to_bytes().as_slice()),
+            "root",
+        ),
+    );
+    root.namespaces[0] = xml::Namespace { prefix: "p", uri: "urn:changed" };
+    let child = ownership_start(
+        testing::expect_ok(reader.feed("<p:child/></r>".to_bytes().as_slice()), "child"),
+    );
+    testing::assert_eq(child.name.uri, "urn:original");
+    testing::assert_ok(reader.finish());
+}
+
+#[test]
+fn returned_namespace_vectors_cannot_declare_reader_prefixes() -> () {
+    let reader = testing::expect_ok(xml::Reader::new(xml::Limits::standard()), "reader");
+    let root = ownership_start(testing::expect_ok(reader.feed("<r>".to_bytes().as_slice()), "root"));
+    root.namespaces.push(xml::Namespace { prefix: "p", uri: "urn:injected" });
+    let failure = testing::expect_err(
+        reader.feed("<p:child/></r>".to_bytes().as_slice()),
+        "undeclared prefix remains invalid",
+    );
+    testing::assert_eq(failure.kind, xml::ErrorKind::Namespace);
+}
+
+#[test]
+fn writer_namespace_scopes_survive_caller_vector_changes() -> () {
+    let namespaces = Vec::from_array([xml::Namespace { prefix: "p", uri: "urn:original" }]);
+    let root = ownership_element("r", "", "", namespaces);
+    let child = ownership_element("child", "p", "urn:original", Vec::new());
+    let writer = testing::expect_ok(xml::Writer::new(xml::Limits::standard()), "writer");
+    let mut output = testing::expect_ok(writer.write(xml::Token::Start(root)), "root");
+    namespaces.clear();
+    output += testing::expect_ok(writer.write(xml::Token::Start(child)), "retained binding");
+    output += testing::expect_ok(writer.write(xml::Token::End(child.name)), "child end");
+    output += testing::expect_ok(writer.write(xml::Token::End(root.name)), "root end");
+    testing::assert_ok(writer.finish());
+    testing::assert_ok(xml::read_all(output.to_bytes().as_slice(), xml::Limits::standard()));
+}
+
+#[test]
+fn writer_namespace_scopes_reject_declarations_added_after_output() -> () {
+    let namespaces = Vec::new();
+    let root = ownership_element("r", "", "", namespaces);
+    let writer = testing::expect_ok(xml::Writer::new(xml::Limits::standard()), "writer");
+    testing::assert_eq(testing::expect_ok(writer.write(xml::Token::Start(root)), "root"), "<r>");
+    namespaces.push(xml::Namespace { prefix: "p", uri: "urn:injected" });
+    let failure = testing::expect_err(
+        writer.write(xml::Token::Start(ownership_element("child", "p", "urn:injected", Vec::new()))),
+        "prefix was never emitted",
+    );
+    testing::assert_eq(failure.kind, xml::ErrorKind::Namespace);
+}

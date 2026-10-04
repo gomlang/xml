@@ -1,0 +1,30 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+#[test]
+fn consumer_token_edits_cannot_change_active_namespace_bindings() -> () {
+    let limits = xml::Limits::standard();
+    let reader = testing::expect_ok(xml::Reader::new(limits), "reader");
+    let tokens = testing::expect_ok(
+        reader.feed("<r xmlns:p=\"urn:kept\">".to_bytes().as_slice()),
+        "root",
+    );
+    let writer = testing::expect_ok(xml::Writer::new(limits), "writer");
+    let mut output = testing::expect_ok(writer.write(tokens[0]), "write root");
+    match tokens[0] {
+        xml::Token::Start(element) => element.namespaces.clear(),
+        _ => testing::fail("expected root start"),
+    }
+    for token in testing::expect_ok(
+        reader.feed("<p:child/></r>".to_bytes().as_slice()),
+        "read child after editing root token",
+    ) {
+        output += testing::expect_ok(writer.write(token), "write child after editing root token");
+    }
+    testing::assert_ok(reader.finish());
+    testing::assert_ok(writer.finish());
+    testing::assert_eq(output, "<r xmlns:p=\"urn:kept\"><p:child></p:child></r>");
+    testing::assert_ok(xml::read_all(output.to_bytes().as_slice(), limits));
+}
