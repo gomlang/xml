@@ -480,7 +480,11 @@ fn apply_raw(raw: RawToken, state: ReaderState, limits: Limits, offset: isize) -
             tokens.push(Token::CData(value));
         },
         RawToken::Instruction(target, raw) => {
-            let _ = split_name(target, offset)?;
+            if !ncname(target) {
+                return Result::Err(
+                    error(ErrorKind::Syntax, offset, "invalid processing instruction target"),
+                )
+            }
             if target.to_ascii_lowercase() == "xml"
                 && (target != "xml" || state.root_seen || state.tokens != 0
                     || offset != state.declaration_offset) {

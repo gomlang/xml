@@ -83,3 +83,52 @@ fn processing_instruction_content_whitespace_counts_toward_decoded_limit() -> ()
     let problem = testing::expect_err(xml::read_all(source.as_slice(), limits), "decoded limit");
     testing::assert_eq(problem.kind, xml::ErrorKind::Limit);
 }
+
+#[test]
+fn processing_instruction_targets_cannot_contain_namespace_colons() -> () {
+    // Namespaces in XML 1.0 section 7 requires PI targets to be NCNames.
+    // Expat's namespace-aware mode rejects these even when the prefix is declared.
+    for source in Vec::from_array(
+        ["<?p:task data?><r/>", "<r xmlns:p='urn:p'><?p:task data?></r>", "<r/><?xml:task?>"],
+    ) {
+        for width in 1..source.byte_len() + 1 {
+            testing::assert_eq(
+                testing::expect_err(instruction_tokens(source, width), "colon in PI target").kind,
+                xml::ErrorKind::Syntax,
+            );
+        }
+    }
+}
+
+#[test]
+fn writer_rejects_processing_instruction_targets_with_colons() -> () {
+    for target in Vec::from_array(["p:task", "xml:task", ":task", "task:", "p:q:task"]) {
+        let writer = testing::expect_ok(xml::Writer::new(xml::Limits::standard()), "writer");
+        testing::assert_eq(
+            testing::expect_err(
+                writer.write(xml::Token::Instruction(target, "data")),
+                "colon in PI target",
+            ).kind,
+            xml::ErrorKind::Syntax,
+        );
+    }
+}
+
+#[test]
+fn unprefixed_processing_instruction_targets_preserve_unicode_and_extended_xml_names() -> () {
+    for target in Vec::from_array(["task", "xml-stylesheet", "XML-task", "_task.2", "任务"]) {
+        let source = "<?" + target + " data?><r/>";
+        for width in Vec::from_array([1, source.byte_len()]) {
+            let tokens = testing::expect_ok(instruction_tokens(source, width), "valid PI target");
+            match tokens[0] {
+                xml::Token::Instruction(actual, _) => testing::assert_eq(actual, target),
+                _ => testing::fail("expected instruction"),
+            }
+            let wire = testing::expect_ok(
+                xml::write_all(tokens, xml::Limits::standard()),
+                "write valid PI target",
+            );
+            testing::assert(testing::expect_ok(instruction_tokens(wire, width), "reread") == tokens);
+        }
+    }
+}

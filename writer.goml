@@ -132,7 +132,11 @@ fn write_token(token: Token, state: WriterState, limits: Limits) -> Result[
             "<![CDATA[" + plain(value, state.output, limits.max_token_bytes)? + "]" + "]>"
         },
         Token::Instruction(target, value) => {
-            let _ = split_name(target, state.output)?;
+            if !ncname(target) {
+                return Result::Err(
+                    error(ErrorKind::Syntax, state.output, "invalid processing instruction target"),
+                )
+            }
             if target.to_ascii_lowercase() == "xml"
                 && (target != "xml" || state.root_seen || state.tokens != 0) {
                 return Result::Err(

@@ -16,3 +16,22 @@ fn downstream_instruction_keeps_unicode_and_trailing_whitespace() -> () {
     let written = testing::expect_ok(xml::write_all(tokens, xml::Limits::standard()), "write");
     testing::assert_eq(written, "<?task \u00a0value \t?><r></r>");
 }
+
+#[test]
+fn downstream_instruction_target_is_an_ncname() -> () {
+    testing::assert_eq(
+        testing::expect_err(
+            xml::read_all(
+                "<r xmlns:p='urn:p'><?p:task data?></r>".to_bytes().as_slice(),
+                xml::Limits::standard(),
+            ),
+            "PI targets cannot be prefixed",
+        ).kind,
+        xml::ErrorKind::Syntax,
+    );
+    let writer = testing::expect_ok(xml::Writer::new(xml::Limits::standard()), "writer");
+    testing::assert_eq(
+        testing::expect_err(writer.write(xml::Token::Instruction("p:task", "")), "target").kind,
+        xml::ErrorKind::Syntax,
+    );
+}

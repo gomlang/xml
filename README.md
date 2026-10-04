@@ -32,7 +32,9 @@ either case. See [XML declarations](https://www.w3.org/TR/xml/#sec-prolog-dtd)
 and [character references](https://www.w3.org/TR/xml/#sec-references).
 
 Ordinary processing instructions omit only the XML whitespace immediately after
-the target. Their content preserves trailing whitespace and Unicode whitespace
+the target. Targets must be NCNames without colons, even when a matching prefix
+is declared, as required by [namespace conformance](https://www.w3.org/TR/xml-names/#Conformance).
+Their content preserves trailing whitespace and Unicode whitespace
 such as nonbreaking spaces, while literal CR/CRLF still normalize to LF. Entity
 references remain literal instruction content. This follows the
 [XML Infoset processing instruction content](https://www.w3.org/TR/xml-infoset/#infoitem.pi)
