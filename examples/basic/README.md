@@ -4,4 +4,4 @@ This example uses the library in this repository. It exercises bounded token par
 
 Run `(cd ../../../verification && just ecosystem-test xml)` from this example directory.
 
-This example shares the library root manifest and development dependencies. Run `goml verify --example basic` to build and test it as an independent downstream module.
+This example shares the library root manifest and development dependencies. From the library root, run `goml test` to build and test it, or `(cd ../verification && just ecosystem-test xml)` to check it against an isolated registry snapshot.
