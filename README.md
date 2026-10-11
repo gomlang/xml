@@ -111,16 +111,16 @@ input and token bounds. Caller-owned values and Serde's intermediate value tree
 are not covered by the output byte limit. Default required fields and opt-in
 optional fields retain their existing cardinality.
 
-Run `(cd ../verification && just ecosystem-test xml)` from this library repository to verify the library, example and its independent downstream verification, and cached build.
+Run `(cd ../workflows && just ecosystem-test xml)` from this library repository to verify the library, example and its independent downstream verification, and cached build.
 
 ## Development and examples
 
-Requires a current GoML toolchain supporting unversioned registry dependencies; see [the pinned ecosystem toolchain](https://github.com/gomlang/verification/blob/main/ci/toolchain.json). The `examples/basic/` example shares the root manifest. From the library root, run:
+Requires a current GoML toolchain supporting unversioned registry dependencies; see [the pinned ecosystem toolchain](https://github.com/gomlang/workflows/blob/main/ci/toolchain.json). The `examples/basic/` example shares the root manifest. From the library root, run:
 
 ```sh
 goml run --example basic
 goml test
-(cd ../verification && just ecosystem-test xml)
+(cd ../workflows && just ecosystem-test xml)
 ```
 
 `goml test` builds the example and runs its tests. The ecosystem verifier uses an isolated registry snapshot and runs the library-specific smoke and compatibility checks.
