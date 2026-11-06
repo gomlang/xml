@@ -1,0 +1,31 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+#[test]
+fn namespace_declaration_colon_requires_a_nonempty_prefix() -> () {
+    for document in["<r xmlns:=\"u\"/>", "<r xmlns: = ''/>", "<r><s xmlns:='u'/></r>"] {
+        let problem = testing::expect_err(
+            xml::read_all(document.to_bytes().as_slice(), xml::Limits::standard()),
+            "empty namespace prefix after colon",
+        );
+        testing::assert_eq(problem.kind, xml::ErrorKind::Namespace);
+        let reader = testing::expect_ok(xml::Reader::new(xml::Limits::standard()), "reader");
+        let mut rejected = false;
+        for byte in document.to_bytes() {
+            match reader.feed(Vec::from_array([byte]).as_slice()) {
+                Result::Ok(_) => (),
+                Result::Err(problem) => {
+                    testing::assert_eq(problem.kind, xml::ErrorKind::Namespace);
+                    rejected = true;
+                    break
+                },
+            }
+        }
+        testing::assert(rejected);
+    }
+    for document in["<r xmlns='u'/>", "<r xmlns=''/>", "<p:r xmlns:p='u'/>", "<名:r xmlns:名='u'/>"] {
+        testing::assert_ok(xml::read_all(document.to_bytes().as_slice(), xml::Limits::standard()));
+    }
+}

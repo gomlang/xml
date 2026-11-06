@@ -349,6 +349,11 @@ fn start_element(body: string, scopes: Vec[Vec[Namespace]], limits: Limits, offs
         let prefix = if entry.name == "xmlns" {
             Option::Some("")
         } else if entry.name.starts_with("xmlns:") {
+            if entry.name.byte_len() == 6 {
+                return Result::Err(
+                    error(ErrorKind::Namespace, offset, "namespace declaration requires a prefix"),
+                )
+            }
             Option::Some(entry.name.byte_slice(6, entry.name.byte_len()))
         } else {
             Option::None
