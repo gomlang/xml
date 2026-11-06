@@ -62,6 +62,10 @@ fn namespaced_tokens() -> Result[Vec[xml::Token], xml::Error] {
 The attribute limit counts ordinary attributes and namespace declarations
 together on each element, in both the reader and writer. A writer rejects an
 over-budget start element before returning output for that token.
+Start tags are assembled within the remaining token and total-output budgets,
+including namespace declarations, qualified names, escaping and closing markup.
+The writer stops as soon as a field would exceed the budget instead of buffering
+all remaining attributes before rejecting the tag.
 
 Exceeding `max_depth` returns `ErrorKind::Limit` in both the reader and writer.
 Writing a second root remains a `State` error. After either write failure, the

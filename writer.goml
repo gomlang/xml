@@ -16,6 +16,32 @@ pub struct Writer {
     state: Ref[WriterState],
 }
 
+fn writer_append(output: Vec[u8], value: string, limit: isize, offset: isize) -> Result[(), Error] {
+    if value.byte_len() > limit - output.len() {
+        return Result::Err(error(ErrorKind::Limit, offset, "XML output exceeds limit"))
+    }
+    output.extend(value.to_bytes());
+    Result::Ok(())
+}
+
+fn writer_name(output: Vec[u8], name: QName, limit: isize, offset: isize) -> Result[(), Error] {
+    if name.prefix != "" {
+        writer_append(output, name.prefix, limit, offset)?;
+        writer_append(output, ":", limit, offset)?;
+    }
+    writer_append(output, name.local, limit, offset)
+}
+
+fn writer_attribute_value(output: Vec[u8], value: string, limit: isize, offset: isize) -> Result[
+    (),
+    Error,
+] {
+    writer_append(output, "=\"", limit, offset)?;
+    let escaped = escape_attribute(value, limit - output.len() - 1)?;
+    writer_append(output, escaped, limit, offset)?;
+    writer_append(output, "\"", limit, offset)
+}
+
 fn initial_writer_state() -> WriterState {
     WriterState {
         output: 0,
@@ -69,20 +95,23 @@ fn write_token(token: Token, state: WriterState, limits: Limits) -> Result[
                 }
             }
             check_qname(element.name, false, element.namespaces, state.scopes, state.output)?;
-            // Append fields without recopying the entire start tag each time.
-            let output = ("<" + rendered_name(element.name)).to_bytes();
+            let budget = if limits.max_token_bytes < limits.max_output_bytes - state.output {
+                limits.max_token_bytes
+            } else {
+                limits.max_output_bytes - state.output
+            };
+            // Reserve the closing '>' and bound every append before allocation.
+            let field_limit = budget - 1;
+            let output: Vec[u8] = Vec::new();
+            writer_append(output, "<", field_limit, state.output)?;
+            writer_name(output, element.name, field_limit, state.output)?;
             for declaration in element.namespaces {
-                let key = if declaration.prefix == "" {
-                    "xmlns"
-                } else {
-                    "xmlns:" + declaration.prefix
-                };
-                let field = (" " + key + "=\""
-                    + escape_attribute(declaration.uri, limits.max_token_bytes)?
-                    + "\"").to_bytes();
-                // Reserve the final '>' too, avoiding a last growth for one field.
-                output.reserve(field.len() + 1);
-                output.extend(field);
+                writer_append(output, " xmlns", field_limit, state.output)?;
+                if declaration.prefix != "" {
+                    writer_append(output, ":", field_limit, state.output)?;
+                    writer_append(output, declaration.prefix, field_limit, state.output)?;
+                }
+                writer_attribute_value(output, declaration.uri, field_limit, state.output)?;
             }
             for index in 0..element.attributes.len() {
                 let attribute = element.attributes[index];
@@ -99,13 +128,11 @@ fn write_token(token: Token, state: WriterState, limits: Limits) -> Result[
                         )
                     }
                 }
-                let field = (" " + rendered_name(attribute.name) + "=\""
-                    + escape_attribute(attribute.value, limits.max_token_bytes)?
-                    + "\"").to_bytes();
-                output.reserve(field.len() + 1);
-                output.extend(field);
+                writer_append(output, " ", field_limit, state.output)?;
+                writer_name(output, attribute.name, field_limit, state.output)?;
+                writer_attribute_value(output, attribute.value, field_limit, state.output)?;
             }
-            output.push(62);
+            writer_append(output, ">", budget, state.output)?;
             state.open.push(element.name);
             state.scopes.push(element.namespaces.copy());
             state.root_seen = true;

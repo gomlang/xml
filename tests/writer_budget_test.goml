@@ -1,0 +1,93 @@
+package tests;
+
+use ecosystem::xml;
+use std::testing;
+
+#[test]
+fn writer_stops_building_start_tags_at_the_cumulative_output_budget() -> () {
+    for token_limit in[true, false] {
+        let limits = xml::Limits {
+            max_token_bytes: if token_limit {
+                32
+            } else {
+                4096
+            },
+            max_output_bytes: if token_limit {
+                4096
+            } else {
+                32
+            },
+            ..xml::Limits::standard(),
+        };
+        let attributes = Vec::new();
+        for name in["a", "b", "c", "invalid:name"] {
+            attributes.push(
+                xml::Attribute {
+                    name: xml::QName { prefix: "", local: name, uri: "" },
+                    value: "12345678",
+                },
+            );
+        }
+        let writer = testing::expect_ok(xml::Writer::new(limits), "writer");
+        let element = xml::Element {
+            name: xml::QName { prefix: "", local: "r", uri: "" },
+            attributes,
+            namespaces: Vec::new(),
+        };
+        let problem = testing::expect_err(writer.write(xml::Token::Start(element)), "tag budget");
+        testing::assert_eq(problem.kind, xml::ErrorKind::Limit);
+        testing::assert_eq(
+            testing::expect_err(writer.write(xml::Token::End(element.name)), "closed writer").kind,
+            xml::ErrorKind::State,
+        );
+    }
+}
+
+#[test]
+fn writer_start_tag_budgets_include_namespaces_escaping_and_prior_output() -> () {
+    let element = xml::Element {
+        name: xml::QName { prefix: "p", local: "r", uri: "u" },
+        attributes: Vec::from_array(
+            [xml::Attribute { name: xml::QName { prefix: "p", local: "a", uri: "u" }, value: "&" }],
+        ),
+        namespaces: Vec::from_array([xml::Namespace { prefix: "p", uri: "u" }]),
+    };
+    let expected = "<p:r xmlns:p=\"u\" p:a=\"&amp;\">";
+    for token_limit in[true, false] {
+        for short in[false, true] {
+            let budget = expected.byte_len()
+                - if short {
+                    1
+                } else {
+                    0
+                };
+            let limits = xml::Limits {
+                max_token_bytes: if token_limit {
+                    budget
+                } else {
+                    4096
+                },
+                max_output_bytes: if token_limit {
+                    4096
+                } else {
+                    budget + 5
+                },
+                ..xml::Limits::standard(),
+            };
+            let writer = testing::expect_ok(xml::Writer::new(limits), "writer");
+            testing::assert_eq(
+                testing::expect_ok(writer.write(xml::Token::Instruction("p", "")), "prefix"),
+                "<?p?>",
+            );
+            let result = writer.write(xml::Token::Start(element));
+            if short {
+                testing::assert_eq(
+                    testing::expect_err(result, "one byte short").kind,
+                    xml::ErrorKind::Limit,
+                );
+            } else {
+                testing::assert_eq(testing::expect_ok(result, "exact start tag budget"), expected);
+            }
+        }
+    }
+}
